@@ -201,6 +201,41 @@ input,select{font:inherit;color:inherit}
 .m-val:last-child{margin-bottom:0}
 .m-val.sec{font-size:14px;font-weight:500;color:var(--text-2)}
 
+/* Registro de series y medidas */
+.logbox{border:1px solid var(--border-strong);border-radius:var(--radius-sm);padding:14px;margin:4px 0 16px;background:var(--surface)}
+.log-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:12px}
+.log-head b{font-size:15px;font-weight:650}
+.log-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:10px}
+.fieldlbl{display:block;font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px}
+.step{display:flex;align-items:stretch;border:1px solid var(--border-strong);border-radius:10px;overflow:hidden;background:var(--surface)}
+.step button{width:34px;flex-shrink:0;font-size:18px;font-weight:500;color:var(--text-2);background:var(--surface-2)}
+.step button:active{background:var(--border)}
+.step input{flex:1;min-width:0;width:100%;border:none;background:transparent;text-align:center;font-size:17px;font-weight:600;padding:9px 2px;outline:none;-moz-appearance:textfield}
+.step input::-webkit-outer-spin-button,.step input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+.log-opt{margin-top:12px}
+.chips-sm{display:flex;flex-wrap:wrap;gap:5px;margin-top:5px}
+.chips-sm button{min-width:34px;padding:6px 8px;border-radius:8px;border:1px solid var(--border);font-size:13px;font-weight:550;color:var(--text-2);background:var(--surface)}
+.chips-sm button.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.chips-sm.mol button.on.v-ok{background:var(--ok);border-color:var(--ok);color:#fff}
+.chips-sm.mol button.on.v-mid{background:var(--warn);border-color:var(--warn);color:#fff}
+.chips-sm.mol button.on.v-bad{background:var(--danger);border-color:var(--danger);color:#fff}
+.btn-primary{width:100%;margin-top:14px;padding:13px;border-radius:11px;background:var(--accent);color:var(--accent-ink);font-size:15px;font-weight:650;display:flex;align-items:center;justify-content:center;gap:8px}
+.btn-primary:disabled{opacity:.55}
+.btn-ghost{padding:7px 12px;border-radius:9px;border:1px solid var(--border-strong);font-size:13px;font-weight:550;color:var(--text-2);background:var(--surface)}
+.undo{font-size:12px;font-weight:550;color:var(--danger);padding:2px 0;text-decoration:underline;text-underline-offset:3px}
+.alarm{display:flex;gap:8px;align-items:flex-start;margin-top:10px;font-size:13px;color:var(--text-2)}
+.alarm input{margin-top:2px;accent-color:var(--danger)}
+.spin{width:16px;height:16px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:rot .7s linear infinite}
+@keyframes rot{to{transform:rotate(360deg)}}
+.toast{position:fixed;left:16px;right:16px;bottom:calc(84px + env(safe-area-inset-bottom));z-index:60;max-width:488px;margin:0 auto;background:var(--accent);color:var(--accent-ink);border-radius:12px;padding:12px 14px;font-size:14px;font-weight:550;box-shadow:0 8px 24px rgba(0,0,0,.18);transform:translateY(20px);opacity:0;transition:all .25s;pointer-events:none;white-space:pre-line}
+.toast.on{transform:none;opacity:1}
+.toast.err{background:var(--danger);color:#fff}
+.med-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.med-grid input{width:100%;border:1px solid var(--border-strong);border-radius:10px;background:var(--surface);padding:10px 12px;font-size:16px;font-weight:600;outline:none}
+.med-grid input:focus{border-color:var(--accent)}
+.title-row{display:flex;justify-content:space-between;align-items:center;margin:22px 2px 10px}
+.title-row .section-title{margin:0}
+
 /* Navegación inferior */
 .tabbar{position:fixed;left:0;right:0;bottom:0;z-index:30;background:color-mix(in srgb,var(--surface) 92%,transparent);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-top:1px solid var(--border);padding:6px 0 calc(6px + env(safe-area-inset-bottom))}
 .tabbar-in{max-width:520px;margin:0 auto;display:flex}
@@ -228,6 +263,7 @@ input,select{font:inherit;color:inherit}
   <main id="view"></main>
 </div>
 
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
 <div class="sheet-bg" id="sheet-bg"></div>
 <div class="sheet" id="sheet" role="dialog" aria-modal="true"><div class="grab"></div><div id="sheet-body"></div></div>
 
@@ -394,6 +430,24 @@ async function api(accion){
   return r;
 }
 
+// Registros (sin caché): la API verifica la firma y el Motor guarda con la lógica del bot
+async function enviar(accion, datos){
+  if (DEMO) return demoEnviar(accion, datos);
+  let res, r;
+  try {
+    res = await fetch(API, { method:'POST', headers:{ 'Content-Type':'application/json', 'ngrok-skip-browser-warning':'1' }, body: JSON.stringify({ initData: INIT, accion, usuarioId: S.usuarioId, datos }) });
+  } catch (e) { return { ok:false, mensaje:'Sin conexión con el coach. No se guardó; intenta de nuevo.' }; }
+  try { r = await res.json(); } catch (e) { return { ok:false, mensaje:'El servidor no respondió bien (' + res.status + '). No se guardó.' }; }
+  return r || { ok:false, mensaje:'Respuesta vacía.' };
+}
+function invalidar(...acciones){ Object.keys(S.cache).forEach(k => { if (acciones.some(a => k.startsWith(a + ':'))) delete S.cache[k]; }); }
+let toastTimer = null;
+function toast(msg, tipo){
+  const t = $('#toast'); t.textContent = msg; t.className = 'toast on' + (tipo === 'err' ? ' err' : '');
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.className = 'toast', tipo === 'err' ? 4500 : 3200);
+}
+function vibrar(tipo){ try { TG && TG.HapticFeedback && TG.HapticFeedback.notificationOccurred(tipo); } catch (e) {} }
+
 // ─── Navegación ──────────────────────────────────────────────────
 const TITULOS = { hoy:'Hoy', progreso:'Progreso', guia:'Guía de ejercicios' };
 function irA(tab){
@@ -442,20 +496,23 @@ function renderHoy(r){
   const h = r.hoy;
   $('#fecha').textContent = fechaLarga(h.fecha);
   const ej = h.ejercicios || [];
+  S.hoyEj = ej;
   const hechos = ej.filter(e => (e.hechas || []).length >= (e.series || 1)).length;
   const pct = ej.length ? Math.round(hechos / ej.length * 100) : 0;
   let html = '';
 
-  if (h.estado === 'entreno') {
+  if (h.estado === 'entreno' || h.vistaPrevia) {
+    const estadoPill = h.vistaPrevia ? '<span class="pill"><span class="dot"></span>Sin iniciar</span>' : pct === 100 ? '<span class="pill ok"><span class="dot"></span>Completada</span>' : '<span class="pill"><span class="dot"></span>En curso</span>';
     html += `<section class="card">
-      <div class="row between"><span class="eyebrow">${esc(h.dia)}</span>${pct === 100 ? '<span class="pill ok"><span class="dot"></span>Completada</span>' : '<span class="pill"><span class="dot"></span>En curso</span>'}</div>
+      <div class="row between"><span class="eyebrow">${h.vistaPrevia ? 'Tu próxima sesión' : esc(h.dia)}</span>${estadoPill}</div>
       <div class="h2" style="margin-top:6px">${esc(h.sesion || 'Sesión de hoy')}</div>
       <div class="hero-meta">${h.bloque ? `<span class="pill">${esc(h.bloque)}</span>` : ''}<span class="pill num">${ej.length} ejercicios</span>${h.modo === 'flexible' ? '<span class="pill">Modo flexible</span>' : ''}</div>
       <div class="progress-row"><span>Progreso de la sesión</span><b class="num">${hechos}/${ej.length}</b></div>
       <div class="bar ${pct === 100 ? 'ok' : ''}"><i style="width:${pct}%"></i></div>
     </section>`;
+    if (h.vistaPrevia) html += `<div class="notice" style="margin-top:12px">${ICON.info}<div>Aún no confirmas en Telegram si entrenas hoy. Si registras una serie aquí, esta pasa a ser tu sesión de hoy.</div></div>`;
     const vig = (h.lesiones || []).filter(l => l.estado !== 'Recuperada (vigilar)');
-    if (vig.length) html += `<div class="notice warn" style="margin-top:12px">${ICON.alert}<div>Zona en cuidado: ${vig.map(l => esc((l.zona || '').toLowerCase() + (l.lado && !['No aplica','Ambos'].includes(l.lado) ? ' ' + l.lado.toLowerCase().replace('derecho', 'derecha').replace('izquierdo', 'izquierda') : ''))).join(', ')}. Registra tu molestia 0-10 en Telegram al terminar.</div></div>`;
+    if (vig.length) html += `<div class="notice warn" style="margin-top:12px">${ICON.alert}<div>Zona en cuidado: ${vig.map(l => esc((l.zona || '').toLowerCase() + (l.lado && !['No aplica','Ambos'].includes(l.lado) ? ' ' + l.lado.toLowerCase().replace('derecho', 'derecha').replace('izquierdo', 'izquierda') : ''))).join(', ')}. Al registrar esos ejercicios, indica tu molestia de 0 a 10.</div></div>`;
 
     // Agrupar por sección conservando el orden
     const grupos = {};
@@ -480,7 +537,7 @@ function renderHoy(r){
             </span>
             <span class="ex-side">${total ? `<span class="pill ${done ? 'ok' : ''} num">${hechas}/${total}</span>` : ''}${ICON.chev}</span>
           </button>
-          <div class="ex-body">${detalleEjercicio(e)}</div>
+          <div class="ex-body">${detalleEjercicio(e, i)}</div>
         </article>`;
       });
     }
@@ -490,6 +547,7 @@ function renderHoy(r){
       sin_confirmar: ['Aún no confirmas si entrenas hoy', 'Responde la pregunta de la mañana en Telegram y aquí aparecerá tu sesión.'],
       no_entrena: ['Hoy no entrenas', 'Tu sesión pendiente pasa al próximo día disponible. Recupera, hidrátate y duerme bien.'],
       descanso: ['Día de descanso', 'Camina, haz algo de movilidad y prioriza el sueño. Mañana seguimos.'],
+      semana_completa: ['¡Semana completa!', 'Hiciste todas las sesiones de tu plan. Recupera bien para la próxima semana.'],
     }[h.estado] || ['Sin sesión', ''];
     html += `<section class="card" style="text-align:center;padding:28px 20px"><div class="muted">${ICON.rest}</div><div class="h2" style="margin-top:6px">${msg[0]}</div><p class="sub" style="margin-top:6px">${msg[1]}</p></section>`;
   }
@@ -580,19 +638,122 @@ document.addEventListener('click', ev => {
   m.dataset.play = on ? 1 : 0; b.innerHTML = on ? ICON_PAUSA : ICON_PLAY; b.setAttribute('aria-label', on ? 'Pausar' : 'Reproducir');
 });
 
-function detalleEjercicio(e){
-  let h = movimiento(e) + musculos(e) + `<div class="kv num">
+// Orden pensado para entrenar: prescripción → registrar → lo hecho hoy → cómo se hace
+function detalleEjercicio(e, i){
+  let h = `<div class="kv num">
     <div><span>Series</span><b>${e.series || '—'}</b></div>
     <div><span>Reps</span><b>${esc(e.reps || '—')}</b></div>
     <div><span>Carga</span><b>${e.carga ? fmt(e.carga) : '—'}</b></div>
     <div><span>Descanso</span><b>${e.descanso ? e.descanso + 's' : '—'}</b></div>
   </div>`;
-  if (e.notas) h += `<div class="block-t">Indicaciones de tu coach</div><p class="prose">${esc(e.notas)}</p>`;
-  h += explicacion(e);
-  if ((e.hechas || []).length) h += `<div class="block-t">Registrado hoy</div><table class="sets num"><tr><th>Serie</th><th>Reps</th><th>Carga</th><th></th></tr>${
-    e.hechas.map((s, k) => `<tr><td>${s.n || k + 1}</td><td>${s.reps ?? '—'}</td><td>${s.carga ? fmt(s.carga) + ' kg' : '—'}</td><td>${s.pr ? '<span class="pill ok">Récord</span>' : ''}</td></tr>`).join('')}</table>`;
+  if (e.notas) h += `<div class="block-t" style="margin-top:0">Indicaciones de tu coach</div><p class="prose" style="margin-bottom:12px">${esc(e.notas)}</p>`;
+  h += formularioSerie(e, i);
+  if ((e.hechas || []).length) {
+    const ult = e.hechas[e.hechas.length - 1];
+    const unidadTxt = e.unidad === 'kg' ? 'Reps' : 'Duración';
+    h += `<div class="block-t">Registrado hoy</div><table class="sets num"><tr><th>Serie</th><th>${unidadTxt}</th><th>Carga</th><th></th></tr>${
+      e.hechas.map((s, k) => `<tr><td>${s.n || k + 1}</td><td>${s.reps ?? '—'}${e.unidad !== 'kg' ? ' ' + e.unidad : ''}</td><td>${s.carga ? fmt(s.carga) + ' kg' : '—'}</td><td style="text-align:right">${s.pr ? '<span class="pill ok">Récord</span> ' : ''}${s === ult ? `<button class="undo" data-undo="${i}" data-n="${s.n || ''}">Deshacer</button>` : ''}</td></tr>`).join('')}</table>`;
+  }
+  h += `<div class="block-t" style="margin-top:20px">Cómo se hace</div>` + movimiento(e) + musculos(e) + explicacion(e);
   if (e.video) h += `<a class="link" href="${esc(e.video)}" target="_blank" rel="noopener">${ICON.play}Ver video</a>`;
   return h;
+}
+
+// Formulario de registro: se rellena con la última serie de hoy, la última sesión o el plan
+function valoresIniciales(e){
+  const ult = (e.hechas || [])[e.hechas.length - 1];
+  const rango = String(e.reps || '').match(/(\d+)(?:\s*[-–]\s*(\d+))?/);
+  const repsPlan = rango ? +(rango[1]) : null;
+  const reps = ult ? ult.reps : e.ultima ? e.ultima.reps : repsPlan;
+  const carga = ult && ult.carga ? ult.carga : e.ultima && e.ultima.carga ? e.ultima.carga : e.carga || null;
+  return { reps: reps ?? '', carga: carga ?? '' };
+}
+function stepper(nombre, valor, paso, etiqueta, decimal){
+  return `<div><label class="fieldlbl">${etiqueta}</label><div class="step"><button type="button" data-step="-${paso}" aria-label="Menos">−</button><input name="${nombre}" type="number" inputmode="${decimal ? 'decimal' : 'numeric'}" step="${decimal ? '0.5' : '1'}" min="0" value="${valor}"/><button type="button" data-step="${paso}" aria-label="Más">+</button></div></div>`;
+}
+function formularioSerie(e, i){
+  if (!e.ejercicioId) return '';
+  const v = valoresIniciales(e), hechas = (e.hechas || []).length, total = e.series || 0;
+  const sinPeso = e.equipo === 'Peso corporal';
+  const pideMolestia = e.zonaVigilada && (e.molestiaHoy === null || e.molestiaHoy === undefined);
+  const campos = e.unidad === 'kg'
+    ? stepper('reps', v.reps, 1, 'Reps') + (sinPeso ? '' : stepper('carga', v.carga, (+v.carga || 0) >= 20 ? 2.5 : 1, 'Kg', true))
+    : stepper('reps', v.reps, e.unidad === 'min' ? 1 : 5, e.unidad === 'min' ? 'Minutos' : 'Segundos');
+  return `<form class="logbox" data-form="${i}" novalidate>
+    <div class="log-head"><b>${total && hechas >= total ? 'Serie extra' : 'Registrar serie ' + (hechas + 1) + (total ? ' de ' + total : '')}</b>${e.ultima ? `<span class="sub num">Última vez: ${e.ultima.reps}${e.unidad !== 'kg' ? ' ' + e.unidad : ''}${e.ultima.carga ? ' × ' + fmt(e.ultima.carga) + ' kg' : ''}</span>` : ''}</div>
+    <div class="log-grid">${campos}${stepper('series', 1, 1, 'Series')}</div>
+    ${e.unidad === 'kg' ? `<div class="log-opt"><span class="fieldlbl">Esfuerzo RPE (opcional)</span><div class="chips-sm" data-chips="rpe">${[6, 7, 8, 9, 10].map(n => `<button type="button" data-v="${n}">${n}</button>`).join('')}</div></div>` : ''}
+    ${pideMolestia ? `<div class="log-opt"><span class="fieldlbl">Molestia en la zona en cuidado (0-10)${e.zonaActiva ? ' · obligatoria' : ''}</span><div class="chips-sm mol" data-chips="molestia">${Array.from({ length: 11 }, (_, n) => `<button type="button" data-v="${n}" class="${n <= 2 ? 'v-ok' : n <= 4 ? 'v-mid' : 'v-bad'}">${n}</button>`).join('')}</div>
+      <label class="alarm"><input type="checkbox" name="alarma"/> Hinchazón, adormecimiento o pérdida de fuerza</label></div>` : ''}
+    <button type="submit" class="btn-primary">Guardar</button>
+  </form>`;
+}
+
+// Delegación de eventos en Hoy: pasos +/−, chips, guardar y deshacer
+$('#view').addEventListener('click', ev => {
+  const st = ev.target.closest('[data-step]');
+  if (st) {
+    const inp = st.parentElement.querySelector('input');
+    const nuevo = Math.max(0, Math.round(((parseFloat(inp.value) || 0) + parseFloat(st.dataset.step)) * 10) / 10);
+    inp.value = nuevo; try { TG && TG.HapticFeedback && TG.HapticFeedback.selectionChanged(); } catch (e) {}
+    return;
+  }
+  const chip = ev.target.closest('[data-chips] button');
+  if (chip) {
+    const grupo = chip.parentElement, on = !chip.classList.contains('on');
+    grupo.querySelectorAll('button').forEach(b => b.classList.remove('on'));
+    if (on) chip.classList.add('on');
+    return;
+  }
+  const und = ev.target.closest('[data-undo]');
+  if (und) { deshacerSerie(+und.dataset.undo, +und.dataset.n, und); return; }
+});
+$('#view').addEventListener('submit', ev => {
+  const f = ev.target.closest('[data-form]');
+  if (!f) return;
+  ev.preventDefault();
+  guardarSerie(+f.dataset.form, f);
+});
+
+async function refrescarHoy(){
+  invalidar('hoy', 'progreso');
+  const y = window.scrollY;
+  try { renderHoy(await api('hoy')); window.scrollTo(0, y); } catch (e) { error(e.message); }
+}
+async function guardarSerie(i, f){
+  const e = S.hoyEj[i]; if (!e) return;
+  const val = n => { const x = f.querySelector(`[name="${n}"]`); return x ? x.value.trim() : ''; };
+  const chipVal = g => { const b = f.querySelector(`[data-chips="${g}"] button.on`); return b ? +b.dataset.v : null; };
+  const reps = parseFloat(val('reps'));
+  if (!(reps > 0)) { toast(e.unidad === 'kg' ? 'Indica las repeticiones.' : 'Indica la duración.', 'err'); return; }
+  const molestia = chipVal('molestia');
+  if (e.zonaActiva && (e.molestiaHoy === null || e.molestiaHoy === undefined) && molestia === null) { toast('Indica tu molestia de 0 a 10 antes de guardar.', 'err'); return; }
+  const btnG = f.querySelector('.btn-primary'), txt = btnG.innerHTML;
+  btnG.disabled = true; btnG.innerHTML = '<span class="spin"></span>Guardando…';
+  const r = await enviar('registrar_serie', {
+    ejercicioId: e.ejercicioId, reps, carga: val('carga') === '' ? null : parseFloat(val('carga')),
+    series: parseInt(val('series'), 10) || 1, rpe: chipVal('rpe'), unidad: e.unidad, molestia,
+    alarma: !!(f.querySelector('[name="alarma"]') || {}).checked,
+  });
+  if (!r || !r.ok) { btnG.disabled = false; btnG.innerHTML = txt; vibrar('error'); toast((r && r.mensaje) || 'No se pudo guardar.', 'err'); return; }
+  vibrar('success');
+  toast(r.pr ? '🏆 ¡Récord personal! Guardado.' : (String(r.mensaje || 'Guardado').split('\n').slice(0, 2).join('\n').replace(/^📱\s*/, '')));
+  S.abiertos.add(i);
+  await refrescarHoy();
+}
+async function deshacerSerie(i, n, boton){
+  const e = S.hoyEj[i]; if (!e || !n) return;
+  const seguir = await new Promise(res => {
+    if (TG && TG.showConfirm && INIT) TG.showConfirm('¿Eliminar la serie ' + n + ' de ' + e.nombre + '?', ok => res(ok));
+    else res(confirm('¿Eliminar la serie ' + n + ' de ' + e.nombre + '?'));
+  });
+  if (!seguir) return;
+  boton.disabled = true; boton.textContent = 'Eliminando…';
+  const r = await enviar('deshacer_serie', { ejercicioId: e.ejercicioId, desde: n });
+  if (!r || !r.ok) { boton.disabled = false; boton.textContent = 'Deshacer'; toast((r && r.mensaje) || 'No se pudo deshacer.', 'err'); return; }
+  toast(r.mensaje || 'Serie eliminada.');
+  S.abiertos.add(i);
+  await refrescarHoy();
 }
 
 // ─── PROGRESO ────────────────────────────────────────────────────
@@ -614,15 +775,39 @@ function deltaTxt(d, unidad, dir){
   const cls = dir === 0 ? '' : ((d < 0) === (dir < 0) ? 'good' : 'bad');
   return `<div class="delta ${cls} num">${d > 0 ? '+' : '−'}${fmt(Math.abs(d))} ${unidad} desde el inicio</div>`;
 }
+// Hoja para registrar peso y medidas (va al Motor, igual que /peso y /medidas en Telegram)
+const CAMPOS_MED = [['Peso kg','Peso','kg'],['Cintura cm','Cintura','cm'],['Cadera cm','Cadera','cm'],['% grasa','% grasa','%'],['Pecho cm','Pecho','cm'],['Cuello cm','Cuello','cm'],['Brazo Dere cm','Brazo der.','cm'],['Brazo Izq cm','Brazo izq.','cm'],['Muslo Dere cm','Muslo der.','cm'],['Muslo Izq cm','Muslo izq.','cm']];
+function abrirMedidas(p){
+  const ult = {};
+  for (const m of (p.medidas || [])) for (const [k] of CAMPOS_MED) if (m[k] != null) ult[k] = m[k];
+  $('#sheet-body').innerHTML = `<div class="eyebrow">Registrar</div><div class="h2" style="margin:2px 0 6px;font-size:22px">Peso y medidas</div>
+    <p class="sub" style="margin-bottom:14px">Completa solo lo que mediste hoy. El peso, idealmente en ayunas.</p>
+    <form id="form-med" novalidate><div class="med-grid">${CAMPOS_MED.map(([k, t, u]) => `<div><label class="fieldlbl" for="m-${esc(k)}">${t} (${u})</label><input id="m-${esc(k)}" name="${esc(k)}" type="number" inputmode="decimal" step="0.1" placeholder="${ult[k] != null ? fmt(ult[k]) : '—'}"/></div>`).join('')}</div>
+    <button type="submit" class="btn-primary">Guardar medidas</button></form>`;
+  $('#sheet').classList.add('on'); $('#sheet-bg').classList.add('on');
+  if (TG && TG.BackButton) { TG.BackButton.show(); TG.BackButton.onClick(cerrarSheet); }
+  $('#form-med').addEventListener('submit', async ev => {
+    ev.preventDefault();
+    const medidas = {};
+    ev.target.querySelectorAll('input').forEach(i => { if (i.value.trim() !== '') medidas[i.name] = parseFloat(i.value.replace(',', '.')); });
+    if (!Object.keys(medidas).length) { toast('Ingresa al menos una medida.', 'err'); return; }
+    const b = ev.target.querySelector('.btn-primary'); b.disabled = true; b.innerHTML = '<span class="spin"></span>Guardando…';
+    const r = await enviar('registrar_medidas', { medidas });
+    if (!r || !r.ok) { b.disabled = false; b.textContent = 'Guardar medidas'; vibrar('error'); toast((r && r.mensaje) || 'No se pudo guardar.', 'err'); return; }
+    vibrar('success'); toast('Medidas guardadas.'); cerrarSheet();
+    invalidar('progreso'); S.progresoVista = 'cuerpo';
+    try { renderProgreso(await api('progreso')); } catch (e) { error(e.message); }
+  });
+}
 function vistaCuerpo(el, p){
   const med = p.medidas || [];
-  if (!med.length) { el.innerHTML = `<div class="empty">${ICON.chart}<div>Aún no hay medidas registradas.<br>Envía tu peso en Telegram para empezar.</div></div>`; return; }
+  if (!med.length) { el.innerHTML = `<div class="empty">${ICON.chart}<div>Aún no hay medidas registradas.</div><button class="btn-primary" id="btn-med" style="max-width:260px;margin:16px auto 0">Registrar peso y medidas</button></div>`; $('#btn-med').addEventListener('click', () => abrirMedidas(p)); return; }
   const serie = k => med.filter(m => m[k] != null).map(m => ({ x: m.fecha, y: m[k] }));
   const disponibles = MEDIDAS.filter(([k]) => serie(k).length);
   if (!disponibles.some(([k]) => k === S.medida)) S.medida = disponibles[0][0];
   const tile = ([k, t, u, dir]) => { const s = serie(k); if (!s.length) return ''; const ult = s[s.length - 1].y; return `<div class="tile"><div class="lbl">${t}</div><div class="val num">${fmt(ult)}<small>${u}</small></div>${s.length > 1 ? deltaTxt(ult - s[0].y, u, dir) : '<div class="delta">Primer registro</div>'}</div>`; };
   const sel = MEDIDAS.find(m => m[0] === S.medida), s = serie(S.medida);
-  el.innerHTML = `<div class="section-title">Resumen</div><div class="tiles">${disponibles.slice(0, 4).map(tile).join('')}</div>
+  el.innerHTML = `<div class="title-row"><div class="section-title">Resumen</div><button class="btn-ghost" id="btn-med">+ Registrar</button></div><div class="tiles">${disponibles.slice(0, 4).map(tile).join('')}</div>
     <div class="section-title">Evolución</div>
     <section class="card">
       <div class="chips">${disponibles.map(([k, t]) => `<button class="chip ${k === S.medida ? 'on' : ''}" data-m="${k}">${t}</button>`).join('')}</div>
@@ -631,6 +816,7 @@ function vistaCuerpo(el, p){
       ${tablaToggle('t-med', ['Fecha', sel[1]], s.slice().reverse().map(d => [fechaCorta(d.x), fmt(d.y) + ' ' + sel[2]]))}
     </section>`;
   el.querySelectorAll('[data-m]').forEach(b => b.addEventListener('click', () => { S.medida = b.dataset.m; limpiarCharts(); vistaCuerpo(el, p); }));
+  $('#btn-med').addEventListener('click', () => abrirMedidas(p));
   activarTablas(el);
   if (s.length > 1) lineChart('c-med', s, sel[2]);
 }
@@ -767,6 +953,23 @@ async function iniciar(){
 }
 
 // ─── Datos de demostración (solo con ?demo, fuera de Telegram) ──
+const DEMO_SERIES = {}, DEMO_BORRADAS = {}, DEMO_MOLESTIA = {}, DEMO_MEDIDAS = [];
+async function demoEnviar(accion, d){
+  await new Promise(r => setTimeout(r, 500));
+  if (accion === 'registrar_serie') {
+    const hoy = (S.hoyEj || []).find(e => e.ejercicioId === d.ejercicioId) || { hechas: [] };
+    let n = Math.max(0, ...hoy.hechas.map(s => s.n || 0));
+    const lista = DEMO_SERIES[d.ejercicioId] = DEMO_SERIES[d.ejercicioId] || [];
+    const prev = Math.max(0, ...hoy.hechas.map(s => s.carga || 0));
+    const pr = d.carga && prev && d.carga > prev && d.ejercicioId === 'ex2';
+    for (let k = 0; k < (d.series || 1); k++) lista.push({ n: ++n, reps: d.reps, carga: d.carga, pr: pr && k === 0 });
+    if (d.molestia !== null && d.molestia !== undefined) DEMO_MOLESTIA[d.ejercicioId] = d.molestia;
+    return { ok: true, pr, mensaje: '✅ ' + hoy.nombre + ': ' + (d.series || 1) + ' serie(s) · ' + d.reps + (d.carga ? ' × ' + d.carga + ' kg' : '') };
+  }
+  if (accion === 'deshacer_serie') { (DEMO_BORRADAS[d.ejercicioId] = DEMO_BORRADAS[d.ejercicioId] || []).push(+d.desde); return { ok: true, mensaje: 'Serie eliminada.' }; }
+  if (accion === 'registrar_medidas') { DEMO_MEDIDAS.push({ fecha: new Date().toISOString().slice(0, 10), ...d.medidas }); return { ok: true, mensaje: 'Medidas guardadas.' }; }
+  return { ok: false, mensaje: 'Acción desconocida' };
+}
 async function demoApi(accion){
   await new Promise(r => setTimeout(r, 350));
   const hoyD = new Date(), iso = d => d.toISOString().slice(0, 10);
@@ -804,14 +1007,24 @@ async function demoApi(accion){
       ['Abducción de cadera en máquina','Accesorio','A',3,'15-20',35,2,0,'',[]],
       ['Puente de glúteo en suelo','Accesorio','A',3,'12',null,2,60,'',[]],
       ['Elíptica','Cardio','',1,'10 min',null,null,null,'Ritmo moderado',[]],
-    ].map((a, i) => conTec(a[0], { id:'r' + i, orden:i + 1, nombre:a[0], seccion:a[1], superserie:a[2], series:a[3], reps:a[4], carga:a[5], rir:a[6], descanso:a[7], notas:a[8], sesion:'Glúteo y cuádriceps', bloque:'Acumulación',
-      hechas:a[9].map(([n, reps, carga]) => ({ n, reps, carga, pr: n === 3 && i === 2 })) }));
+    ].map((a, i) => {
+      const id = 'ex' + i, extra = DEMO_SERIES[id] || [];
+      const base9 = a[9].map(([n, reps, carga]) => ({ n, reps, carga, pr: n === 3 && i === 2 }));
+      const hechas = base9.concat(extra).filter(s => !(DEMO_BORRADAS[id] || []).includes(s.n));
+      const rodilla = ['Sentadilla isométrica en pared', 'Prensa de piernas', 'Sentadilla goblet'].includes(a[0]);
+      return conTec(a[0], { id:'r' + i, ejercicioId:id, orden:i + 1, nombre:a[0], seccion:a[1], superserie:a[2], series:a[3], reps:a[4], carga:a[5], rir:a[6], descanso:a[7], notas:a[8], sesion:'Glúteo y cuádriceps', bloque:'Acumulación',
+        equipo: ['Activación de glúteo con banda', 'Sentadilla isométrica en pared', 'Puente de glúteo en suelo'].includes(a[0]) ? 'Peso corporal' : 'Máquina',
+        unidad: /min/.test(a[4]) ? 'min' : /\ds\b|\d\s+s\b/.test(a[4]) ? 's' : 'kg',
+        zonaVigilada: rodilla, zonaActiva: rodilla, molestiaHoy: rodilla && hechas.length ? (DEMO_MOLESTIA[id] ?? null) : null,
+        ultima: i === 2 ? { fecha: dAtras(5), reps: 12, carga: 55 } : i === 3 ? { fecha: dAtras(5), reps: 12, carga: 80 } : null,
+        hechas });
+    });
     return { ...base, hoy:{ fecha: iso(hoyD), dia: ['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'][hoyD.getDay()], modo:'flexible', estado:'entreno', sesion:'Glúteo y cuádriceps', bloque:'Acumulación', ejercicios: ej,
       lesiones:[{ zona:'Rodilla', lado:'Izquierdo', estado:'En recuperación' }],
       semana:[['Glúteo y cuádriceps',false],['Tren superior',true],['Femoral y glúteo posterior',false],['Full body (circuito)',false],['Hombros y core',false]].map(([s, h], i) => ({ dia:['Lunes','Martes','Miércoles','Jueves','Viernes'][i], sesion:s, hecha:h, omitida:false })) } };
   }
   if (accion === 'progreso') {
-    const medidas = Array.from({ length: 12 }, (_, i) => ({ fecha: dAtras(77 - i * 7), 'Peso kg': +(68.4 - i * 0.22 + Math.sin(i) * 0.25).toFixed(1), 'Cintura cm': +(78 - i * 0.3).toFixed(1), 'Cadera cm': +(100 - i * 0.1).toFixed(1), '% grasa': +(29 - i * 0.25).toFixed(1) }));
+    const medidas = Array.from({ length: 12 }, (_, i) => ({ fecha: dAtras(77 - i * 7), 'Peso kg': +(68.4 - i * 0.22 + Math.sin(i) * 0.25).toFixed(1), 'Cintura cm': +(78 - i * 0.3).toFixed(1), 'Cadera cm': +(100 - i * 0.1).toFixed(1), '% grasa': +(29 - i * 0.25).toFixed(1) })).concat(DEMO_MEDIDAS);
     const mk = (nombre, ini, paso) => ({ ejercicio:nombre, puntos: Array.from({ length: 9 }, (_, i) => ({ fecha: dAtras(60 - i * 7), carga: ini + Math.floor(i / 2) * paso, reps: 10 + (i % 2) * 2, pr: i === 8 })) });
     const semanas = Array.from({ length: 8 }, (_, i) => { const d = new Date(lunes); d.setDate(d.getDate() - (7 - i) * 7); return { semana: iso(d), cumplimiento: [62, 70, 58, 75, 81, 77, 85, 72][i], entrenos: [3, 4, 2, 4, 5, 4, 5, 2][i] }; });
     return { ...base, progreso:{ medidas, cargas:[mk('Hip thrust en máquina', 45, 5), mk('Prensa de piernas 45°', 70, 5), mk('Jalón al pecho', 30, 2.5)], semanas,

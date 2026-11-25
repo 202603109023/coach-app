@@ -388,7 +388,9 @@ const S = { tab:'hoy', usuarioId:null, cache:{}, progresoVista:'cuerpo', medida:
 // ─── Utilidades ──────────────────────────────────────────────────
 const $ = s => document.querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const fmt = (n, d=1) => n == null || isNaN(n) ? '—' : (Math.round(n * 10**d) / 10**d).toLocaleString('es-CL');
+// Número escrito por el usuario: acepta coma o punto decimal ("12,25" → 12.25)
+const num = s => { const t = String(s ?? '').trim().replace(/\s/g, '').replace(',', '.'); return t === '' || isNaN(+t) ? NaN : +t; };
+const fmt = (n, d=2) => n == null || isNaN(n) ? '—' : (Math.round(n * 10**d) / 10**d).toLocaleString('es-CL');
 const fechaLarga = iso => new Date(iso + 'T12:00:00').toLocaleDateString('es-CL', { weekday:'long', day:'numeric', month:'long' });
 const fechaCorta = iso => new Date(iso + 'T12:00:00').toLocaleDateString('es-CL', { day:'numeric', month:'short' }).replace('.', '');
 const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
@@ -515,12 +517,16 @@ function renderHoy(r){
     const vig = (h.lesiones || []).filter(l => l.estado !== 'Recuperada (vigilar)');
     if (vig.length) html += `<div class="notice warn" style="margin-top:12px">${ICON.alert}<div>Zona en cuidado: ${vig.map(l => esc((l.zona || '').toLowerCase() + (l.lado && !['No aplica','Ambos'].includes(l.lado) ? ' ' + l.lado.toLowerCase().replace('derecho', 'derecha').replace('izquierdo', 'izquierda') : ''))).join(', ')}. Al registrar esos ejercicios, indica tu molestia de 0 a 10.</div></div>`;
 
-    // Agrupar por sección conservando el orden
-    const grupos = {};
-    ej.forEach((e, i) => { const k = ORDEN_SECCION.includes(e.seccion) ? e.seccion : ''; (grupos[k] = grupos[k] || []).push({ e, i }); });
+    // Respeta el Orden del plan; agrupa solo ejercicios seguidos de la misma sección
+    // (si el coach pone un accesorio de activación primero, se ve primero)
+    const grupos = [];
+    ej.map((e, i) => ({ e, i })).sort((a, b) => (a.e.orden ?? a.i) - (b.e.orden ?? b.i) || a.i - b.i).forEach(x => {
+      const k = ORDEN_SECCION.includes(x.e.seccion) ? x.e.seccion : '';
+      const ult = grupos[grupos.length - 1];
+      if (ult && ult.sec === k) ult.items.push(x); else grupos.push({ sec: k, items: [x] });
+    });
     const ss = etiquetasSuperserie(ej);
-    for (const sec of ORDEN_SECCION) {
-      const g = grupos[sec]; if (!g) continue;
+    for (const { sec, items: g } of grupos) {
       html += `<div class="group-label">${esc(sec || 'Ejercicios')}</div>`;
       g.forEach(({ e, i }, k) => {
         const hechas = (e.hechas || []).length, total = e.series || 0;
@@ -670,7 +676,7 @@ function valoresIniciales(e){
   return { reps: reps ?? '', carga: carga ?? '' };
 }
 function stepper(nombre, valor, paso, etiqueta, decimal){
-  return `<div><label class="fieldlbl">${etiqueta}</label><div class="step"><button type="button" data-step="-${paso}" aria-label="Menos">−</button><input name="${nombre}" type="number" inputmode="${decimal ? 'decimal' : 'numeric'}" step="${decimal ? '0.5' : '1'}" min="0" value="${valor}"/><button type="button" data-step="${paso}" aria-label="Más">+</button></div></div>`;
+  return `<div><label class="fieldlbl">${etiqueta}</label><div class="step"><button type="button" data-step="-${paso}" aria-label="Menos">−</button><input name="${nombre}" type="text" inputmode="${decimal ? 'decimal' : 'numeric'}" autocomplete="off" value="${decimal && valor !== '' ? String(valor).replace('.', ',') : valor}"/><button type="button" data-step="${paso}" aria-label="Más">+</button></div></div>`;
 }
 function formularioSerie(e, i){
   if (!e.ejercicioId) return '';
@@ -679,7 +685,7 @@ function formularioSerie(e, i){
   const pideMolestia = e.zonaVigilada && (e.molestiaHoy === null || e.molestiaHoy === undefined);
   const campos = e.unidad === 'kg'
     ? stepper('reps', v.reps, 1, 'Reps') + (sinPeso ? '' : stepper('carga', v.carga, (+v.carga || 0) >= 20 ? 2.5 : 1, 'Kg', true))
-    : stepper('reps', v.reps, e.unidad === 'min' ? 1 : 5, e.unidad === 'min' ? 'Minutos' : 'Segundos');
+    : stepper('reps', v.reps, e.unidad === 'min' ? 1 : 5, e.unidad === 'min' ? 'Minutos' : 'Segundos', e.unidad === 'min');
   return `<form class="logbox" data-form="${i}" novalidate>
     <div class="log-head"><b>${total && hechas >= total ? 'Serie extra' : 'Registrar serie ' + (hechas + 1) + (total ? ' de ' + total : '')}</b>${e.ultima ? `<span class="sub num">Última vez: ${e.ultima.reps}${e.unidad !== 'kg' ? ' ' + e.unidad : ''}${e.ultima.carga ? ' × ' + fmt(e.ultima.carga) + ' kg' : ''}</span>` : ''}</div>
     <div class="log-grid">${campos}${stepper('series', 1, 1, 'Series')}</div>
@@ -695,8 +701,8 @@ $('#view').addEventListener('click', ev => {
   const st = ev.target.closest('[data-step]');
   if (st) {
     const inp = st.parentElement.querySelector('input');
-    const nuevo = Math.max(0, Math.round(((parseFloat(inp.value) || 0) + parseFloat(st.dataset.step)) * 10) / 10);
-    inp.value = nuevo; try { TG && TG.HapticFeedback && TG.HapticFeedback.selectionChanged(); } catch (e) {}
+    const nuevo = Math.max(0, Math.round(((num(inp.value) || 0) + parseFloat(st.dataset.step)) * 100) / 100);
+    inp.value = inp.inputMode === 'decimal' ? String(nuevo).replace('.', ',') : nuevo; try { TG && TG.HapticFeedback && TG.HapticFeedback.selectionChanged(); } catch (e) {}
     return;
   }
   const chip = ev.target.closest('[data-chips] button');
@@ -725,22 +731,43 @@ async function guardarSerie(i, f){
   const e = S.hoyEj[i]; if (!e) return;
   const val = n => { const x = f.querySelector(`[name="${n}"]`); return x ? x.value.trim() : ''; };
   const chipVal = g => { const b = f.querySelector(`[data-chips="${g}"] button.on`); return b ? +b.dataset.v : null; };
-  const reps = parseFloat(val('reps'));
+  const reps = num(val('reps'));
+  if (val('carga') !== '' && isNaN(num(val('carga')))) { toast('Revisa los kg: usa números, por ejemplo 12,25.', 'err'); return; }
   if (!(reps > 0)) { toast(e.unidad === 'kg' ? 'Indica las repeticiones.' : 'Indica la duración.', 'err'); return; }
   const molestia = chipVal('molestia');
   if (e.zonaActiva && (e.molestiaHoy === null || e.molestiaHoy === undefined) && molestia === null) { toast('Indica tu molestia de 0 a 10 antes de guardar.', 'err'); return; }
   const btnG = f.querySelector('.btn-primary'), txt = btnG.innerHTML;
   btnG.disabled = true; btnG.innerHTML = '<span class="spin"></span>Guardando…';
+  const carga = val('carga') === '' ? null : num(val('carga')), series = parseInt(val('series'), 10) || 1;
   const r = await enviar('registrar_serie', {
-    ejercicioId: e.ejercicioId, reps, carga: val('carga') === '' ? null : parseFloat(val('carga')),
-    series: parseInt(val('series'), 10) || 1, rpe: chipVal('rpe'), unidad: e.unidad, molestia,
+    ejercicioId: e.ejercicioId, reps, carga, series, rpe: chipVal('rpe'), unidad: e.unidad, molestia,
     alarma: !!(f.querySelector('[name="alarma"]') || {}).checked,
   });
   if (!r || !r.ok) { btnG.disabled = false; btnG.innerHTML = txt; vibrar('error'); toast((r && r.mensaje) || 'No se pudo guardar.', 'err'); return; }
   vibrar('success');
   toast(r.pr ? '🏆 ¡Récord personal! Guardado.' : (String(r.mensaje || 'Guardado').split('\n').slice(0, 2).join('\n').replace(/^📱\s*/, '')));
   S.abiertos.add(i);
-  await refrescarHoy();
+  // Muestra al instante lo guardado (sin esperar otra consulta) y luego sincroniza en segundo plano
+  const n0 = r.primeraN || Math.max(0, ...(e.hechas || []).map(s => s.n || 0)) + 1;
+  e.hechas = (e.hechas || []).concat(Array.from({ length: series }, (_, k) => ({ n: n0 + k, reps, carga: e.unidad === 'kg' ? carga : 0, pr: !!r.pr && k === 0 })));
+  if (molestia !== null) e.molestiaHoy = molestia;
+  const y = window.scrollY, cache = S.cache['hoy:' + (S.usuarioId || 'yo')];
+  if (cache) { renderHoy(cache); window.scrollTo(0, y); }
+  sincronizarHoy();
+}
+// Vuelve a pedir "hoy" sin bloquear: si falla, se queda lo que ya se ve
+let _sync = 0;
+async function sincronizarHoy(){
+  const yo = ++_sync;
+  await new Promise(res => setTimeout(res, 600));
+  if (yo !== _sync) return;            // llegó otro registro: solo vale la última sincronización
+  const key = 'hoy:' + (S.usuarioId || 'yo'), previo = S.cache[key];
+  invalidar('hoy', 'progreso');
+  try {
+    const h = await api('hoy');
+    if (yo !== _sync || S.tab !== 'hoy' || document.querySelector('.ex form :focus')) return;
+    const y = window.scrollY; renderHoy(h); window.scrollTo(0, y);
+  } catch (e) { if (previo) S.cache[key] = previo; }
 }
 async function deshacerSerie(i, n, boton){
   const e = S.hoyEj[i]; if (!e || !n) return;
@@ -783,15 +810,17 @@ function abrirMedidas(p){
   for (const m of (p.medidas || [])) for (const [k] of CAMPOS_MED) if (m[k] != null) ult[k] = m[k];
   $('#sheet-body').innerHTML = `<div class="eyebrow">Registrar</div><div class="h2" style="margin:2px 0 6px;font-size:22px">Peso y medidas</div>
     <p class="sub" style="margin-bottom:14px">Completa solo lo que mediste hoy. El peso, idealmente en ayunas.</p>
-    <form id="form-med" novalidate><div class="med-grid">${CAMPOS_MED.map(([k, t, u]) => `<div><label class="fieldlbl" for="m-${esc(k)}">${t} (${u})</label><input id="m-${esc(k)}" name="${esc(k)}" type="number" inputmode="decimal" step="0.1" placeholder="${ult[k] != null ? fmt(ult[k]) : '—'}"/></div>`).join('')}</div>
+    <form id="form-med" novalidate><div class="med-grid">${CAMPOS_MED.map(([k, t, u]) => `<div><label class="fieldlbl" for="m-${esc(k)}">${t} (${u})</label><input id="m-${esc(k)}" name="${esc(k)}" type="text" inputmode="decimal" autocomplete="off" placeholder="${ult[k] != null ? fmt(ult[k]) : '—'}"/></div>`).join('')}</div>
     <button type="submit" class="btn-primary">Guardar medidas</button></form>`;
   $('#sheet').classList.add('on'); $('#sheet-bg').classList.add('on');
   if (TG && TG.BackButton) { TG.BackButton.show(); TG.BackButton.onClick(cerrarSheet); }
   $('#form-med').addEventListener('submit', async ev => {
     ev.preventDefault();
     const medidas = {};
-    ev.target.querySelectorAll('input').forEach(i => { if (i.value.trim() !== '') medidas[i.name] = parseFloat(i.value.replace(',', '.')); });
+    ev.target.querySelectorAll('input').forEach(i => { if (i.value.trim() !== '') medidas[i.name] = num(i.value); });
     if (!Object.keys(medidas).length) { toast('Ingresa al menos una medida.', 'err'); return; }
+    const mal = Object.keys(medidas).find(k => isNaN(medidas[k]));
+    if (mal) { toast('Revisa ' + (CAMPOS_MED.find(c => c[0] === mal) || [, mal])[1] + ': usa números, por ejemplo 36,25.', 'err'); return; }
     const b = ev.target.querySelector('.btn-primary'); b.disabled = true; b.innerHTML = '<span class="spin"></span>Guardando…';
     const r = await enviar('registrar_medidas', { medidas });
     if (!r || !r.ok) { b.disabled = false; b.textContent = 'Guardar medidas'; vibrar('error'); toast((r && r.mensaje) || 'No se pudo guardar.', 'err'); return; }

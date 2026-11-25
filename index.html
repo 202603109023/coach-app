@@ -235,6 +235,17 @@ input,select{font:inherit;color:inherit}
 .med-grid input:focus{border-color:var(--accent)}
 .title-row{display:flex;justify-content:space-between;align-items:center;margin:22px 2px 10px}
 .title-row .section-title{margin:0}
+.med-row{width:100%;display:flex;justify-content:space-between;align-items:center;gap:10px;padding:11px 0;border-bottom:1px solid var(--border);text-align:left}
+.med-row:last-child{border-bottom:none}
+.med-row .r{text-align:right;flex-shrink:0}
+.med-row .r b{font-size:16px;font-weight:650}
+.med-row .r small{font-size:12px;color:var(--muted);margin-left:2px}
+.med-row.on .n{font-weight:650}
+.dl{font-size:12px;font-weight:600;color:var(--text-2)} .dl.good{color:var(--ok)} .dl.bad{color:var(--warn)}
+.hist-day{padding:12px 0;border-bottom:1px solid var(--border)}
+.hist-day:last-child{border-bottom:none}
+.hist-day .kv{grid-template-columns:repeat(3,1fr);margin:8px 0 0}
+.hist-day .kv b small{font-size:11px;font-weight:500;color:var(--muted);margin-left:1px}
 
 /* Navegación inferior */
 .tabbar{position:fixed;left:0;right:0;bottom:0;z-index:30;background:color-mix(in srgb,var(--surface) 92%,transparent);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-top:1px solid var(--border);padding:6px 0 calc(6px + env(safe-area-inset-bottom))}
@@ -837,7 +848,11 @@ function vistaCuerpo(el, p){
   if (!disponibles.some(([k]) => k === S.medida)) S.medida = disponibles[0][0];
   const tile = ([k, t, u, dir]) => { const s = serie(k); if (!s.length) return ''; const ult = s[s.length - 1].y; return `<div class="tile"><div class="lbl">${t}</div><div class="val num">${fmt(ult)}<small>${u}</small></div>${s.length > 1 ? deltaTxt(ult - s[0].y, u, dir) : '<div class="delta">Primer registro</div>'}</div>`; };
   const sel = MEDIDAS.find(m => m[0] === S.medida), s = serie(S.medida);
+  const fila = ([k, t, u, dir]) => { const sr = serie(k), ult = sr[sr.length - 1], ant = sr[sr.length - 2];
+    return `<button class="med-row ${k === S.medida ? 'on' : ''}" data-m="${k}"><span><div class="n">${t}</div><div class="sub num">${fechaCorta(ult.x)}${ant ? ' · ' + dlTxt(ult.y - ant.y, u, dir) + ' vs anterior' : ' · primer registro'}</div></span><span class="r num"><b>${fmt(ult.y)}</b><small>${u}</small>${sr.length > 1 ? '<div class="sub" style="font-size:12px">' + dlTxt(ult.y - sr[0].y, u, dir) + ' total</div>' : ''}</span></button>`; };
   el.innerHTML = `<div class="title-row"><div class="section-title">Resumen</div><button class="btn-ghost" id="btn-med">+ Registrar</button></div><div class="tiles">${disponibles.slice(0, 4).map(tile).join('')}</div>
+    <div class="title-row"><div class="section-title">Todas las medidas</div><button class="btn-ghost" id="btn-hist">Ficha por fecha</button></div>
+    <section class="card" style="padding-top:4px;padding-bottom:4px">${disponibles.map(fila).join('')}</section>
     <div class="section-title">Evolución</div>
     <section class="card">
       <div class="chips">${disponibles.map(([k, t]) => `<button class="chip ${k === S.medida ? 'on' : ''}" data-m="${k}">${t}</button>`).join('')}</div>
@@ -847,9 +862,50 @@ function vistaCuerpo(el, p){
     </section>`;
   el.querySelectorAll('[data-m]').forEach(b => b.addEventListener('click', () => { S.medida = b.dataset.m; limpiarCharts(); vistaCuerpo(el, p); }));
   $('#btn-med').addEventListener('click', () => abrirMedidas(p));
+  $('#btn-hist').addEventListener('click', () => abrirHistorialMedidas(p));
   activarTablas(el);
   if (s.length > 1) lineChart('c-med', s, sel[2]);
 }
+function dlTxt(d, u, dir){
+  if (d == null || isNaN(d) || Math.abs(d) < 0.005) return '<span class="dl">=</span>';
+  const cls = dir === 0 ? '' : ((d < 0) === (dir < 0) ? 'good' : 'bad');
+  return `<span class="dl ${cls}">${d > 0 ? '+' : '−'}${fmt(Math.abs(d))} ${u}</span>`;
+}
+// Todas las medidas agrupadas por fecha (la más reciente arriba), con el cambio vs la medición anterior
+function abrirHistorialMedidas(p){
+  const med = (p.medidas || []).slice().sort((a, b) => a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0);
+  const porFecha = new Map();
+  for (const m of med) { const f = porFecha.get(m.fecha) || {}; for (const [k] of MEDIDAS) if (m[k] != null) f[k] = m[k]; porFecha.set(m.fecha, f); }
+  const previo = {}, dias = [];
+  for (const [fecha, vals] of porFecha) {
+    const items = MEDIDAS.filter(([k]) => vals[k] != null).map(([k, t, u, dir]) => { const d = previo[k] != null ? vals[k] - previo[k] : null; previo[k] = vals[k]; return { t, u, dir, v: vals[k], d }; });
+    if (items.length) dias.push({ fecha, items });
+  }
+  dias.reverse();
+  // Ficha: todas las medidas (las 12), de la fecha elegida o las últimas de cada una
+  const ORDEN_FICHA = ['Peso kg','% grasa','Cintura cm','Cadera cm','Pecho cm','Cuello cm','Brazo Dere cm','Brazo Izq cm','Muslo Dere cm','Muslo Izq cm','Pantorrilla Dere cm','Pantorrilla Izq cm'];
+  const campos = ORDEN_FICHA.map(k => MEDIDAS.find(m => m[0] === k)).filter(Boolean);
+  const nombre = k => (CAMPOS_MED.find(c => c[0] === k) || [, k])[1];
+  const anteriorA = (k, f) => { let v = null; for (const [fe, vals] of porFecha) { if (fe >= f) break; if (vals[k] != null) v = vals[k]; } return v; };
+  let elegido = 'ultimas';
+  const pintar = () => {
+    let filas;
+    if (elegido === 'ultimas') filas = campos.map(([k, , u, dir]) => { let f = null; for (const [fe, vals] of porFecha) if (vals[k] != null) f = fe; if (!f) return { k, u }; const v = porFecha.get(f)[k], pr = anteriorA(k, f); return { k, u, dir, v, f, d: pr != null ? v - pr : null }; });
+    else { const vals = porFecha.get(elegido) || {}; filas = campos.map(([k, , u, dir]) => { const v = vals[k]; if (v == null) return { k, u }; const pr = anteriorA(k, elegido); return { k, u, dir, v, d: pr != null ? v - pr : null }; }); }
+    const n = filas.filter(x => x.v != null).length;
+    $('#ficha').innerHTML = `<div class="sub" style="margin:10px 2px 2px">${n} de ${campos.length} medidas${elegido === 'ultimas' ? ' · cada una con su fecha' : ' registradas ese día'}</div>
+      ${filas.map(x => `<div class="med-row" style="cursor:default"><span><div class="n" style="${x.v == null ? 'color:var(--muted)' : ''}">${nombre(x.k)}</div>${x.v != null ? `<div class="sub num">${x.f ? fechaCorta(x.f) + ' · ' : ''}${x.d != null ? dlTxt(x.d, x.u, x.dir) + ' vs anterior' : 'primer registro'}</div>` : ''}</span><span class="r num">${x.v != null ? `<b>${fmt(x.v)}</b><small>${x.u}</small>` : '<span class="sub">—</span>'}</span></div>`).join('')}`;
+  };
+  $('#sheet-body').innerHTML = `<div class="eyebrow">Progreso</div><div class="h2" style="margin:2px 0 10px;font-size:22px">Ficha de medidas</div>
+    <label class="fieldlbl" for="ficha-f">Fecha</label>
+    <select class="select" id="ficha-f"><option value="ultimas">Últimas registradas</option>${dias.map(d => `<option value="${d.fecha}">${fechaOpcion(d.fecha)} · ${d.items.length} ${d.items.length === 1 ? 'medida' : 'medidas'}</option>`).join('')}</select>
+    <div id="ficha"></div>`;
+  $('#ficha-f').addEventListener('change', e => { elegido = e.target.value; pintar(); });
+  pintar();
+  $('#sheet').classList.add('on'); $('#sheet-bg').classList.add('on');
+  if (TG && TG.BackButton) { TG.BackButton.show(); TG.BackButton.onClick(cerrarSheet); }
+}
+function fechaOpcion(iso){ try { const s = new Date(iso + 'T12:00:00').toLocaleDateString('es-CL', { weekday:'short', day:'numeric', month:'short', year:'numeric' }); return s.charAt(0).toUpperCase() + s.slice(1); } catch (e) { return iso; } }
 function vistaFuerza(el, p){
   const cargas = p.cargas || [];
   if (!cargas.length) { el.innerHTML = `<div class="empty">${ICON.chart}<div>Aún no hay series con carga registradas.</div></div>`; return; }

@@ -73,6 +73,12 @@ input,select{font:inherit;color:inherit}
 .notice{display:flex;gap:12px;align-items:flex-start;padding:14px 16px;border-radius:var(--radius);background:var(--surface-2);color:var(--text-2);font-size:14px}
 .notice svg{flex-shrink:0;margin-top:1px}
 .notice.warn{background:var(--warn-soft);color:var(--warn)}
+.notice.swap{margin-bottom:8px;font-size:13px;padding:12px 14px}
+.swap-btn{display:inline-flex;align-items:center;gap:6px;margin:0 0 12px}
+.ex-swap{display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-2);margin-top:2px}
+.alt-row{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:12px 14px;margin-bottom:8px;border-radius:12px;border:1px solid var(--border-strong);background:var(--surface);color:var(--text)}
+.alt-row.on{border-color:var(--ok);background:var(--surface-2)}
+.alt-row .n{font-weight:600}
 
 /* Hoy */
 .hero-meta{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
@@ -247,6 +253,28 @@ input,select{font:inherit;color:inherit}
 .hist-day .kv{grid-template-columns:repeat(3,1fr);margin:8px 0 0}
 .hist-day .kv b small{font-size:11px;font-weight:500;color:var(--muted);margin-left:1px}
 
+/* Temporizador (descanso y ejercicios por tiempo) */
+.timer{position:fixed;left:12px;right:12px;bottom:calc(70px + env(safe-area-inset-bottom));z-index:35;max-width:496px;margin:0 auto;background:var(--surface);border:1px solid var(--border-strong);border-radius:16px;box-shadow:0 10px 30px rgba(0,0,0,.16);padding:12px 14px 12px;transform:translateY(16px);opacity:0;pointer-events:none;transition:all .2s}
+.timer.on{transform:none;opacity:1;pointer-events:auto}
+.timer.fin{border-color:var(--ok);background:var(--ok-soft)}
+.timer.extra{border-color:var(--warn)}
+.tm-top{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.tm-lbl{font-size:12px;font-weight:650;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+.tm-tg{font-size:12px;font-weight:550;color:var(--text-2);padding:3px 8px;border-radius:8px;border:1px solid var(--border-strong);background:var(--surface)}
+.tm-tg.off{opacity:.55;text-decoration:line-through}
+.tm-mid{display:flex;align-items:center;gap:12px;margin-top:4px}
+.tm-t{font-size:40px;font-weight:700;letter-spacing:-.02em;line-height:1.05;min-width:118px;font-variant-numeric:tabular-nums}
+.tm-sig{flex:1;min-width:0;font-size:13px;color:var(--text-2);line-height:1.3}
+.tm-bar{height:4px;border-radius:4px;background:var(--surface-2);overflow:hidden;margin-top:8px}
+.tm-bar i{display:block;height:100%;background:var(--accent);transition:width .25s linear}
+.timer.fin .tm-bar i{background:var(--ok)}
+.tm-btns{display:flex;gap:8px;margin-top:10px}
+.tm-btns button{flex:1;padding:9px 0;border-radius:10px;border:1px solid var(--border-strong);background:var(--surface);font-size:14px;font-weight:600;color:var(--text)}
+.tm-btns button.main{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+body.timer-on #view{padding-bottom:150px}
+body.timer-on .toast{bottom:calc(200px + env(safe-area-inset-bottom))}
+.crono-btn{display:inline-flex;align-items:center;gap:6px;margin-top:12px}
+
 /* Navegación inferior */
 .tabbar{position:fixed;left:0;right:0;bottom:0;z-index:30;background:color-mix(in srgb,var(--surface) 92%,transparent);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-top:1px solid var(--border);padding:6px 0 calc(6px + env(safe-area-inset-bottom))}
 .tabbar-in{max-width:520px;margin:0 auto;display:flex}
@@ -275,6 +303,7 @@ input,select{font:inherit;color:inherit}
 </div>
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
+<div class="timer" id="timer" role="timer" aria-live="off"></div>
 <div class="sheet-bg" id="sheet-bg"></div>
 <div class="sheet" id="sheet" role="dialog" aria-modal="true"><div class="grab"></div><div id="sheet-body"></div></div>
 
@@ -506,10 +535,261 @@ function etiquetasSuperserie(lista){
     return l + cont[l];
   });
 }
+// ─── TEMPORIZADOR ────────────────────────────────────────────────
+// Descanso: arranca solo al guardar una serie (con el descanso del plan). Avisa con vibración y sonido,
+// y además el bot manda "Descanso terminado" a Telegram (suena aunque el teléfono esté bloqueado).
+// Trabajo: cronómetro para ejercicios por tiempo (plancha, sentadilla en pared, cardio por minutos).
+// La cuenta se calcula con la hora real: si sales de Telegram y vuelves, el tiempo sigue siendo correcto.
+let TIMER = null;
+const TM = { int: null, audio: null, lock: null, deb: null, cierre: null };
+const mmss = s => { s = Math.max(0, Math.round(s)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+function avisoTg(v){
+  try { if (v !== undefined) localStorage.setItem('avisoTg', v ? '1' : '0'); return localStorage.getItem('avisoTg') !== '0'; } catch (e) { return v !== undefined ? v : true; }
+}
+function guardarTimer(){ try { TIMER ? localStorage.setItem('timer', JSON.stringify(TIMER)) : localStorage.removeItem('timer'); } catch (e) {} }
+// El sonido solo se puede preparar con un toque del usuario (por eso se llama al tocar Guardar o Iniciar)
+function prepararAudio(){
+  try { TM.audio = TM.audio || new (window.AudioContext || window.webkitAudioContext)(); if (TM.audio.state === 'suspended') TM.audio.resume(); } catch (e) {}
+}
+function pitido(veces, frec){
+  const a = TM.audio; if (!a) return;
+  try {
+    for (let k = 0; k < (veces || 1); k++) {
+      const o = a.createOscillator(), g = a.createGain(), t = a.currentTime + k * 0.32;
+      o.type = 'sine'; o.frequency.value = frec || 880;
+      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.35, t + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
+      o.connect(g).connect(a.destination); o.start(t); o.stop(t + 0.25);
+    }
+  } catch (e) {}
+}
+function alertaFin(){
+  pitido(3);
+  try { navigator.vibrate && navigator.vibrate([350, 120, 350, 120, 350]); } catch (e) {}
+  try { TG && TG.HapticFeedback && TG.HapticFeedback.notificationOccurred('success'); } catch (e) {}
+}
+// Mantiene la pantalla encendida mientras corre (si el teléfono lo permite)
+async function pantallaEncendida(on){
+  try {
+    if (on && !TM.lock && 'wakeLock' in navigator) { TM.lock = await navigator.wakeLock.request('screen'); TM.lock.addEventListener('release', () => { TM.lock = null; }); }
+    else if (!on && TM.lock) { await TM.lock.release(); TM.lock = null; }
+  } catch (e) {}
+}
+// ---- Aviso del bot (n8n espera el descanso y manda el mensaje; si se salta o ajusta, se cancela) ----
+function cancelarAvisoBot(){
+  clearTimeout(TM.deb);
+  if (TIMER && TIMER.espera) { const id = TIMER.espera; TIMER.espera = null; enviar('descanso_cancelar', { id }); }
+}
+function programarAvisoBot(){
+  clearTimeout(TM.deb);
+  if (!TIMER || TIMER.modo !== 'descanso' || !avisoTg()) return;
+  const yo = TIMER;
+  TM.deb = setTimeout(async () => {
+    if (TIMER !== yo || !avisoTg()) return;
+    const resta = Math.round((yo.fin - Date.now()) / 1000);
+    if (resta < 15) return;   // muy corto: basta con el aviso de la app
+    const r = await enviar('descanso', { segundos: resta, texto: yo.texto });
+    const id = r && r.ok && r.espera && r.espera.id;
+    if (!id) return;
+    if (TIMER === yo && !yo.sonado) { yo.espera = id; guardarTimer(); }
+    else enviar('descanso_cancelar', { id });   // ya cambió mientras se programaba
+  }, 1500);
+}
+// ---- Descanso ----
+function iniciarDescanso(seg, texto){
+  cancelarAvisoBot();
+  TIMER = { modo: 'descanso', fin: Date.now() + seg * 1000, total: seg, texto: texto || '' };
+  guardarTimer(); pintarTimer(); programarAvisoBot();
+}
+function ajustarDescanso(d){
+  if (!TIMER || TIMER.modo !== 'descanso' || TIMER.sonado) return;
+  TIMER.fin = Math.max(Date.now() + 5000, TIMER.fin + d * 1000);
+  TIMER.total = Math.max(5, TIMER.total + d);
+  cancelarAvisoBot(); guardarTimer(); tickTimer(); programarAvisoBot();
+}
+// ---- Trabajo (por tiempo): 3-2-1, cuenta regresiva del objetivo y luego tiempo extra ----
+function iniciarTrabajo(i){
+  const e = S.hoyEj[i]; if (!e) return;
+  const f = document.querySelector(`[data-form="${i}"]`);
+  const v = num(f && f.querySelector('[name="reps"]') ? f.querySelector('[name="reps"]').value : e.reps);
+  const objetivo = Math.round((v > 0 ? v : 30) * (e.unidad === 'min' ? 60 : 1));
+  prepararAudio(); cancelarAvisoBot();
+  TIMER = { modo: 'trabajo', i, unidad: e.unidad, objetivo, inicio: Date.now() + 3000, texto: e.nombre, rutinaId: e.id };
+  guardarTimer(); pintarTimer();
+}
+function terminarTrabajo(){
+  if (!TIMER || TIMER.modo !== 'trabajo') return;
+  const seg = Math.max(0, (Date.now() - TIMER.inicio) / 1000);
+  const i = S.hoyEj.findIndex(x => x.id === TIMER.rutinaId), unidad = TIMER.unidad;
+  cerrarTimer();
+  if (seg < 1) return;
+  const valor = unidad === 'min' ? Math.round(seg / 6) / 10 : Math.round(seg);
+  const inp = i >= 0 && document.querySelector(`[data-form="${i}"] [name="reps"]`);
+  if (inp) {
+    inp.value = unidad === 'min' ? String(valor).replace('.', ',') : valor;
+    inp.closest('form').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+  toast('Anotado: ' + (unidad === 'min' ? String(valor).replace('.', ',') + ' min' : valor + ' s') + '. Toca Guardar.');
+}
+function cerrarTimer(){
+  cancelarAvisoBot(); clearTimeout(TM.cierre);
+  TIMER = null; guardarTimer(); pintarTimer();
+}
+// ---- Pantalla ----
+function pintarTimer(){
+  const el = $('#timer');
+  clearInterval(TM.int);
+  document.body.classList.toggle('timer-on', !!TIMER);
+  if (!TIMER) { el.className = 'timer'; pantallaEncendida(false); return; }
+  const des = TIMER.modo === 'descanso';
+  el.innerHTML = `<div class="tm-top"><span class="tm-lbl" id="tm-lbl"></span>${des ? `<button type="button" class="tm-tg${avisoTg() ? '' : ' off'}" data-tm="tg">🔔 Telegram</button>` : ''}</div>
+    <div class="tm-mid"><span class="tm-t num" id="tm-t"></span><span class="tm-sig" id="tm-sig">${esc(TIMER.texto)}</span></div>
+    <div class="tm-bar"><i id="tm-bar"></i></div>
+    <div class="tm-btns" id="tm-btns">${des
+      ? `<button type="button" data-tm="-15">−15 s</button><button type="button" data-tm="+15">+15 s</button><button type="button" class="main" data-tm="saltar">Saltar</button>`
+      : `<button type="button" data-tm="cancelar">Cancelar</button><button type="button" class="main" data-tm="terminar">Terminar</button>`}</div>`;
+  el.className = 'timer on';
+  pantallaEncendida(true);
+  tickTimer();
+  TM.int = setInterval(tickTimer, 250);
+}
+function tickTimer(){
+  if (!TIMER) return;
+  const el = $('#timer'), ahora = Date.now();
+  const set = (id, v) => { const x = document.getElementById(id); if (x && x.textContent !== v) x.textContent = v; };
+  if (TIMER.modo === 'descanso') {
+    const resta = (TIMER.fin - ahora) / 1000;
+    if (resta > 0) {
+      set('tm-lbl', 'Descanso'); set('tm-t', mmss(Math.ceil(resta)));
+      $('#tm-bar').style.width = Math.max(0, Math.min(100, 100 * (1 - resta / TIMER.total))) + '%';
+      return;
+    }
+    if (!TIMER.sonado) {
+      TIMER.sonado = true; TIMER.espera = null; guardarTimer();
+      // Si el aviso llega mucho después (la app estuvo en segundo plano), no suena de golpe
+      if (ahora - TIMER.fin < 15000) alertaFin();
+      el.classList.add('fin');
+      set('tm-lbl', '¡Descanso terminado!'); set('tm-t', '0:00'); $('#tm-bar').style.width = '100%';
+      $('#tm-btns').innerHTML = '<button type="button" class="main" data-tm="cerrar">¡Vamos!</button>';
+      clearInterval(TM.int); pantallaEncendida(false);
+      TM.cierre = setTimeout(() => { if (TIMER && TIMER.sonado) cerrarTimer(); }, 12000);
+    }
+    return;
+  }
+  // Trabajo
+  const pasado = (ahora - TIMER.inicio) / 1000;
+  if (pasado < 0) {
+    const n = Math.ceil(-pasado);
+    if (TIMER.cuenta !== n) { TIMER.cuenta = n; pitido(1, 660); }
+    set('tm-lbl', 'Prepárate'); set('tm-t', String(n)); $('#tm-bar').style.width = '0%';
+    return;
+  }
+  if (TIMER.cuenta !== 0) { TIMER.cuenta = 0; pitido(1, 990); try { TG && TG.HapticFeedback && TG.HapticFeedback.impactOccurred('medium'); } catch (e) {} }
+  const resta = TIMER.objetivo - pasado;
+  if (resta > 0) {
+    set('tm-lbl', 'En curso · objetivo ' + mmss(TIMER.objetivo)); set('tm-t', mmss(Math.ceil(resta)));
+    $('#tm-bar').style.width = Math.min(100, 100 * pasado / TIMER.objetivo) + '%';
+  } else {
+    if (!TIMER.sonado) { TIMER.sonado = true; alertaFin(); el.classList.add('extra'); }
+    set('tm-lbl', '¡Objetivo cumplido! Tiempo extra'); set('tm-t', '+' + mmss(-resta)); $('#tm-bar').style.width = '100%';
+  }
+}
+$('#timer').addEventListener('click', ev => {
+  const b = ev.target.closest('[data-tm]'); if (!b) return;
+  const a = b.dataset.tm;
+  if (a === '-15' || a === '+15') ajustarDescanso(+a);
+  else if (a === 'saltar' || a === 'cerrar' || a === 'cancelar') cerrarTimer();
+  else if (a === 'terminar') terminarTrabajo();
+  else if (a === 'tg') {
+    const on = !avisoTg(); avisoTg(on);
+    b.classList.toggle('off', !on);
+    if (on) programarAvisoBot(); else cancelarAvisoBot();
+    toast(on ? 'También te aviso por Telegram al terminar el descanso.' : 'Sin aviso por Telegram (solo en la app).');
+  }
+});
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && TIMER) { pantallaEncendida(true); tickTimer(); } });
+// Al abrir la app: retoma un temporizador que seguía corriendo
+(function retomarTimer(){
+  try {
+    const t = JSON.parse(localStorage.getItem('timer') || 'null');
+    if (t && ((t.modo === 'descanso' && !t.sonado && t.fin > Date.now() - 5000) || (t.modo === 'trabajo' && Date.now() - t.inicio < 30 * 60000))) { TIMER = t; setTimeout(pintarTimer, 0); }
+    else localStorage.removeItem('timer');
+  } catch (e) {}
+})();
+// Después de guardar una serie: descanso del plan, salvo que toque el siguiente de la superserie
+function descansoTras(i){
+  const ej = S.hoyEj || [], e = ej[i]; if (!e) return;
+  const orden = ej.map((x, k) => ({ x, k })).sort((a, b) => (a.x.orden ?? a.k) - (b.x.orden ?? b.k) || a.k - b.k);
+  const falta = x => (x.hechas || []).length < (x.series || 1);
+  const ss = etiquetasSuperserie(ej);
+  if (ss[i]) {
+    const letra = ss[i].replace(/\d+$/, '');
+    const grupo = ej.map((x, k) => ({ x, k })).filter(o => ss[o.k] && ss[o.k].replace(/\d+$/, '') === letra);
+    const pareja = grupo.find(o => o.k !== i && falta(o.x) && (o.x.hechas || []).length < (e.hechas || []).length);
+    if (pareja) { toast('Superserie: sigue con ' + ss[pareja.k] + ' · ' + pareja.x.nombre + ' (sin descanso).'); return; }
+  }
+  const sig = falta(e) ? e : (orden.find(o => falta(o.x)) || {}).x;
+  if (!sig) { toast('🏁 ¡Sesión completa! Buen trabajo.'); return; }
+  const seg = Number(e.descanso) || 0;
+  if (!(seg >= 10)) return;
+  const h = (sig.hechas || []).length, tot = sig.series || 0;
+  const texto = sig === e ? 'Serie ' + (h + 1) + (tot ? ' de ' + tot : '') + ' · ' + e.nombre : 'Siguiente: ' + sig.nombre;
+  iniciarDescanso(seg, texto);
+}
+
+// ─── REEMPLAZOS (máquina ocupada) ────────────────────────────────
+// La tarjeta del plan puede mostrar otro ejercicio: el elegido aquí (se recuerda en este teléfono por el día)
+// o el que ya se registró hoy como reemplazo. La serie se guarda con el ejercicio hecho, ligada a la fila del plan.
+const mismoId = (a, b) => !!a && !!b && String(a).replace(/-/g, '') === String(b).replace(/-/g, '');
+const ICON_CAMBIO = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3l4 4-4 4"/><path d="M3 11V9a2 2 0 0 1 2-2h16"/><path d="M7 21l-4-4 4-4"/><path d="M21 13v2a2 2 0 0 1-2 2H3"/></svg>';
+function cargarCambios(fecha){
+  if (S.cambiosFecha === fecha) return;
+  S.cambiosFecha = fecha; S.cambios = {};
+  try { S.cambios = JSON.parse(localStorage.getItem('cambios:' + fecha) || '{}') || {}; } catch (e) {}
+}
+function guardarCambios(){ try { localStorage.setItem('cambios:' + S.cambiosFecha, JSON.stringify(S.cambios)); } catch (e) {} }
+function vistaEj(e){
+  const id = S.cambios && S.cambios[e.id] !== undefined ? S.cambios[e.id] : e.reemplazoId;
+  const alt = id && !mismoId(id, e.ejercicioId) ? (e.alternativas || []).find(a => mismoId(a.ejercicioId, id)) : null;
+  if (!alt) return e;
+  return { ...e, ...alt, carga: null, notas: e.notas, original: { ejercicioId: e.ejercicioId, nombre: e.nombre, equipo: e.equipo } };
+}
+function nombreDeSerie(e, exId){
+  if (!exId || mismoId(exId, e.ejercicioId)) return '';
+  if (e.original && mismoId(exId, e.original.ejercicioId)) return e.original.nombre;
+  const a = (e.alternativas || []).find(x => mismoId(x.ejercicioId, exId));
+  return a ? a.nombre : '';
+}
+function abrirCambio(i){
+  const e = S.hoyEj[i], base = S.hoyBase[i]; if (!e || !base) return;
+  const alts = base.alternativas || [];
+  const fila = (a, actual) => `<button class="alt-row${actual ? ' on' : ''}" data-alt="${esc(a.ejercicioId)}">
+      <span style="flex:1;min-width:0"><div class="n">${esc(a.nombre)}</div><div class="sub num">${a.equipo ? esc(a.equipo) + ' · ' : ''}${a.ultima ? 'Última vez ' + a.ultima.reps + (a.ultima.carga ? ' × ' + fmt(a.ultima.carga) + ' kg' : ' reps') : 'Primera vez'}${a.zonaActiva && !base.zonaActiva ? ' · ⚠️ exige tu zona en cuidado' : ''}</div></span>
+      ${actual ? `<span class="pill ok">Actual</span>` : ICON.chev}</button>`;
+  $('#sheet-body').innerHTML = `<div class="eyebrow">Máquina ocupada</div><div class="h2" style="margin:2px 0 6px;font-size:22px">Cambiar ${esc(base.nombre)}</div>
+    <p class="sub" style="margin-bottom:12px">Elige otro ejercicio para el mismo músculo. La serie queda anotada como reemplazo, y los kg se guardan en el historial del ejercicio que hagas: barra, mancuernas y máquina no se mezclan.</p>
+    ${e.original ? fila({ ejercicioId: base.ejercicioId, nombre: base.nombre + ' (del plan)', equipo: base.equipo, ultima: base.ultima }, false) : ''}
+    ${alts.map(a => fila(a, mismoId(a.ejercicioId, e.ejercicioId))).join('')}
+    ${alts.length ? '' : '<div class="empty">No hay alternativas en el catálogo para este ejercicio.</div>'}`;
+  $('#sheet-body').querySelectorAll('[data-alt]').forEach(b => b.addEventListener('click', () => {
+    const id = b.dataset.alt;
+    S.cambios[base.id] = mismoId(id, base.ejercicioId) ? null : id; guardarCambios();
+    cerrarSheet(); vibrar('success');
+    S.abiertos.add(i);
+    const cache = S.cache['hoy:' + (S.usuarioId || 'yo')], y = window.scrollY;
+    if (cache) { renderHoy(cache); window.scrollTo(0, y); }
+    const nuevo = S.hoyEj[i];
+    toast(nuevo.original ? 'Ahora registras ' + nuevo.nombre + ' en lugar de ' + nuevo.original.nombre + '.' : 'Volviste a ' + nuevo.nombre + '.');
+  }));
+  $('#sheet').classList.add('on'); $('#sheet-bg').classList.add('on');
+  if (TG && TG.BackButton) { TG.BackButton.show(); TG.BackButton.onClick(cerrarSheet); }
+}
+
 function renderHoy(r){
   const h = r.hoy;
   $('#fecha').textContent = fechaLarga(h.fecha);
-  const ej = h.ejercicios || [];
+  cargarCambios(h.fecha);
+  S.hoyBase = h.ejercicios || [];
+  const ej = S.hoyBase.map(vistaEj);
   S.hoyEj = ej;
   const hechos = ej.filter(e => (e.hechas || []).length >= (e.series || 1)).length;
   const pct = ej.length ? Math.round(hechos / ej.length * 100) : 0;
@@ -550,6 +830,7 @@ function renderHoy(r){
             <span class="ex-idx num">${done ? ICON.check : (e.orden || i + 1)}</span>
             <span class="ex-main">
               <div class="ex-name">${ss[i] ? `<span class="ss-tag">${ss[i]}</span>` : ''}${esc(e.nombre)}</div>
+              ${e.original ? `<div class="ex-swap">${ICON_CAMBIO}En lugar de ${esc(e.original.nombre)}</div>` : ''}
               <div class="ex-rx num">${esc(prescripcion(e))}</div>
               ${parseTecnica(e.tecnica).tip ? `<div class="ex-tip">${esc(parseTecnica(e.tecnica).tip)}</div>` : ''}
             </span>
@@ -665,12 +946,17 @@ function detalleEjercicio(e, i){
     <div><span>Descanso</span><b>${e.descanso ? e.descanso + 's' : '—'}</b></div>
   </div>`;
   if (e.notas) h += `<div class="block-t" style="margin-top:0">Indicaciones de tu coach</div><p class="prose" style="margin-bottom:12px">${esc(e.notas)}</p>`;
+  // Máquina ocupada: cambiar por una alternativa (o volver al del plan)
+  if (e.original) h += `<div class="notice swap">${ICON_CAMBIO}<div style="flex:1">Reemplazo de <b>${esc(e.original.nombre)}</b>. La carga del plan no aplica: los kg se guardan en el historial de ${esc(e.nombre)}.</div></div>
+    <button type="button" class="btn-ghost swap-btn" data-cambio="${i}">Cambiar otra vez o volver al del plan</button>`;
+  else if ((e.alternativas || []).length) h += `<button type="button" class="btn-ghost swap-btn" data-cambio="${i}">${ICON_CAMBIO}¿Máquina ocupada? Cambiar ejercicio</button>`;
   h += formularioSerie(e, i);
   if ((e.hechas || []).length) {
     const ult = e.hechas[e.hechas.length - 1];
     const unidadTxt = e.unidad === 'kg' ? 'Reps' : 'Duración';
     h += `<div class="block-t">Registrado hoy</div><table class="sets num"><tr><th>Serie</th><th>${unidadTxt}</th><th>Carga</th><th></th></tr>${
-      e.hechas.map((s, k) => `<tr><td>${s.n || k + 1}</td><td>${s.reps ?? '—'}${e.unidad !== 'kg' ? ' ' + e.unidad : ''}</td><td>${s.carga ? fmt(s.carga) + ' kg' : '—'}</td><td style="text-align:right">${s.pr ? '<span class="pill ok">Récord</span> ' : ''}${s === ult ? `<button class="undo" data-undo="${i}" data-n="${s.n || ''}">Deshacer</button>` : ''}</td></tr>`).join('')}</table>`;
+      e.hechas.map((s, k) => { const otro = nombreDeSerie(e, s.ejercicioId);
+        return `<tr><td>${k + 1}</td><td>${s.reps ?? '—'}${e.unidad !== 'kg' ? ' ' + e.unidad : ''}${otro ? `<div class="sub" style="font-size:11px">${esc(otro)}</div>` : ''}</td><td>${s.carga ? fmt(s.carga) + ' kg' : '—'}</td><td style="text-align:right">${s.pr ? '<span class="pill ok">Récord</span> ' : ''}${s === ult ? `<button class="undo" data-undo="${i}" data-n="${s.n || ''}" data-ex="${esc(s.ejercicioId || e.ejercicioId)}">Deshacer</button>` : ''}</td></tr>`; }).join('')}</table>`;
   }
   h += `<div class="block-t" style="margin-top:20px">Cómo se hace</div>` + movimiento(e) + musculos(e) + explicacion(e);
   if (e.video) h += `<a class="link" href="${esc(e.video)}" target="_blank" rel="noopener">${ICON.play}Ver video</a>`;
@@ -679,7 +965,9 @@ function detalleEjercicio(e, i){
 
 // Formulario de registro: se rellena con la última serie de hoy, la última sesión o el plan
 function valoresIniciales(e){
-  const ult = (e.hechas || [])[e.hechas.length - 1];
+  // Solo las series de este mismo ejercicio (en un reemplazo, las del original son de otro equipo)
+  const propias = (e.hechas || []).filter(s => !s.ejercicioId || mismoId(s.ejercicioId, e.ejercicioId));
+  const ult = propias[propias.length - 1];
   const rango = String(e.reps || '').match(/(\d+)(?:\s*[-–]\s*(\d+))?/);
   const repsPlan = rango ? +(rango[1]) : null;
   const reps = ult ? ult.reps : e.ultima ? e.ultima.reps : repsPlan;
@@ -700,6 +988,7 @@ function formularioSerie(e, i){
   return `<form class="logbox" data-form="${i}" novalidate>
     <div class="log-head"><b>${total && hechas >= total ? 'Serie extra' : 'Registrar serie ' + (hechas + 1) + (total ? ' de ' + total : '')}</b>${e.ultima ? `<span class="sub num">Última vez: ${e.ultima.reps}${e.unidad !== 'kg' ? ' ' + e.unidad : ''}${e.ultima.carga ? ' × ' + fmt(e.ultima.carga) + ' kg' : ''}</span>` : ''}</div>
     <div class="log-grid">${campos}${stepper('series', 1, 1, 'Series')}</div>
+    ${e.unidad !== 'kg' ? `<button type="button" class="btn-ghost crono-btn" data-crono="${i}">${ICON.play}Iniciar cronómetro</button>` : ''}
     ${e.unidad === 'kg' ? `<div class="log-opt"><span class="fieldlbl">Esfuerzo RPE (opcional)</span><div class="chips-sm" data-chips="rpe">${[6, 7, 8, 9, 10].map(n => `<button type="button" data-v="${n}">${n}</button>`).join('')}</div></div>` : ''}
     ${pideMolestia ? `<div class="log-opt"><span class="fieldlbl">Molestia en la zona en cuidado (0-10)${e.zonaActiva ? ' · obligatoria' : ''}</span><div class="chips-sm mol" data-chips="molestia">${Array.from({ length: 11 }, (_, n) => `<button type="button" data-v="${n}" class="${n <= 2 ? 'v-ok' : n <= 4 ? 'v-mid' : 'v-bad'}">${n}</button>`).join('')}</div>
       <label class="alarm"><input type="checkbox" name="alarma"/> Hinchazón, adormecimiento o pérdida de fuerza</label></div>` : ''}
@@ -725,6 +1014,10 @@ $('#view').addEventListener('click', ev => {
   }
   const und = ev.target.closest('[data-undo]');
   if (und) { deshacerSerie(+und.dataset.undo, +und.dataset.n, und); return; }
+  const cmb = ev.target.closest('[data-cambio]');
+  if (cmb) { abrirCambio(+cmb.dataset.cambio); return; }
+  const cro = ev.target.closest('[data-crono]');
+  if (cro) { iniciarTrabajo(+cro.dataset.crono); return; }
 });
 $('#view').addEventListener('submit', ev => {
   const f = ev.target.closest('[data-form]');
@@ -740,6 +1033,7 @@ async function refrescarHoy(){
 }
 async function guardarSerie(i, f){
   const e = S.hoyEj[i]; if (!e) return;
+  prepararAudio();   // el sonido del descanso necesita este toque
   const val = n => { const x = f.querySelector(`[name="${n}"]`); return x ? x.value.trim() : ''; };
   const chipVal = g => { const b = f.querySelector(`[data-chips="${g}"] button.on`); return b ? +b.dataset.v : null; };
   const reps = num(val('reps'));
@@ -753,17 +1047,22 @@ async function guardarSerie(i, f){
   const r = await enviar('registrar_serie', {
     ejercicioId: e.ejercicioId, reps, carga, series, rpe: chipVal('rpe'), unidad: e.unidad, molestia,
     alarma: !!(f.querySelector('[name="alarma"]') || {}).checked,
+    rutinaId: e.original ? e.id : null,   // reemplazo: queda ligado a la fila del plan
   });
   if (!r || !r.ok) { btnG.disabled = false; btnG.innerHTML = txt; vibrar('error'); toast((r && r.mensaje) || 'No se pudo guardar.', 'err'); return; }
   vibrar('success');
   toast(r.pr ? '🏆 ¡Récord personal! Guardado.' : (String(r.mensaje || 'Guardado').split('\n').slice(0, 2).join('\n').replace(/^📱\s*/, '')));
   S.abiertos.add(i);
   // Muestra al instante lo guardado (sin esperar otra consulta) y luego sincroniza en segundo plano
-  const n0 = r.primeraN || Math.max(0, ...(e.hechas || []).map(s => s.n || 0)) + 1;
-  e.hechas = (e.hechas || []).concat(Array.from({ length: series }, (_, k) => ({ n: n0 + k, reps, carga: e.unidad === 'kg' ? carga : 0, pr: !!r.pr && k === 0 })));
-  if (molestia !== null) e.molestiaHoy = molestia;
+  // Se anota en la tarjeta del plan (la vista con reemplazo se rearma desde ella)
+  const base = S.hoyBase[i] || e;
+  const n0 = r.primeraN || Math.max(0, ...(e.hechas || []).filter(s => !s.ejercicioId || mismoId(s.ejercicioId, e.ejercicioId)).map(s => s.n || 0)) + 1;
+  base.hechas = (base.hechas || []).concat(Array.from({ length: series }, (_, k) => ({ n: n0 + k, reps, carga: e.unidad === 'kg' ? carga : 0, pr: !!r.pr && k === 0, ejercicioId: e.ejercicioId })));
+  if (e.original) base.reemplazoId = e.ejercicioId;
+  if (molestia !== null) base.molestiaHoy = molestia;
   const y = window.scrollY, cache = S.cache['hoy:' + (S.usuarioId || 'yo')];
   if (cache) { renderHoy(cache); window.scrollTo(0, y); }
+  descansoTras(i);
   sincronizarHoy();
 }
 // Vuelve a pedir "hoy" sin bloquear: si falla, se queda lo que ya se ve
@@ -788,7 +1087,7 @@ async function deshacerSerie(i, n, boton){
   });
   if (!seguir) return;
   boton.disabled = true; boton.textContent = 'Eliminando…';
-  const r = await enviar('deshacer_serie', { ejercicioId: e.ejercicioId, desde: n });
+  const r = await enviar('deshacer_serie', { ejercicioId: boton.dataset.ex || e.ejercicioId, desde: n });
   if (!r || !r.ok) { boton.disabled = false; boton.textContent = 'Deshacer'; toast((r && r.mensaje) || 'No se pudo deshacer.', 'err'); return; }
   toast(r.mensaje || 'Serie eliminada.');
   S.abiertos.add(i);
@@ -1039,7 +1338,7 @@ async function iniciar(){
 }
 
 // ─── Datos de demostración (solo con ?demo, fuera de Telegram) ──
-const DEMO_SERIES = {}, DEMO_BORRADAS = {}, DEMO_MOLESTIA = {}, DEMO_MEDIDAS = [];
+const DEMO_SERIES = {}, DEMO_BORRADAS = {}, DEMO_MOLESTIA = {}, DEMO_MEDIDAS = [], DEMO_AVISOS = [];
 async function demoEnviar(accion, d){
   await new Promise(r => setTimeout(r, 500));
   if (accion === 'registrar_serie') {
@@ -1048,11 +1347,14 @@ async function demoEnviar(accion, d){
     const lista = DEMO_SERIES[d.ejercicioId] = DEMO_SERIES[d.ejercicioId] || [];
     const prev = Math.max(0, ...hoy.hechas.map(s => s.carga || 0));
     const pr = d.carga && prev && d.carga > prev && d.ejercicioId === 'ex2';
-    for (let k = 0; k < (d.series || 1); k++) lista.push({ n: ++n, reps: d.reps, carga: d.carga, pr: pr && k === 0 });
+    if (d.rutinaId) n = Math.max(0, ...lista.map(s => s.n || 0));
+    for (let k = 0; k < (d.series || 1); k++) lista.push({ n: ++n, reps: d.reps, carga: d.carga, pr: pr && k === 0, ejercicioId: d.ejercicioId, rutinaId: d.rutinaId || null });
     if (d.molestia !== null && d.molestia !== undefined) DEMO_MOLESTIA[d.ejercicioId] = d.molestia;
     return { ok: true, pr, mensaje: '✅ ' + hoy.nombre + ': ' + (d.series || 1) + ' serie(s) · ' + d.reps + (d.carga ? ' × ' + d.carga + ' kg' : '') };
   }
   if (accion === 'deshacer_serie') { (DEMO_BORRADAS[d.ejercicioId] = DEMO_BORRADAS[d.ejercicioId] || []).push(+d.desde); return { ok: true, mensaje: 'Serie eliminada.' }; }
+  if (accion === 'descanso') { DEMO_AVISOS.push({ ...d, estado: 'programado' }); return { ok: true, espera: { id: 'd' + DEMO_AVISOS.length } }; }
+  if (accion === 'descanso_cancelar') { const a = DEMO_AVISOS[+String(d.id).slice(1) - 1]; if (a) a.estado = 'cancelado'; return { ok: true, cancelado: true }; }
   if (accion === 'registrar_medidas') { DEMO_MEDIDAS.push({ fecha: new Date().toISOString().slice(0, 10), ...d.medidas }); return { ok: true, mensaje: 'Medidas guardadas.' }; }
   return { ok: false, mensaje: 'Acción desconocida' };
 }
@@ -1094,16 +1396,26 @@ async function demoApi(accion){
       ['Puente de glúteo en suelo','Accesorio','A',3,'12',null,2,60,'',[]],
       ['Elíptica','Cardio','',1,'10 min',null,null,null,'Ritmo moderado',[]],
     ].map((a, i) => {
-      const id = 'ex' + i, extra = DEMO_SERIES[id] || [];
-      const base9 = a[9].map(([n, reps, carga]) => ({ n, reps, carga, pr: n === 3 && i === 2 }));
-      const hechas = base9.concat(extra).filter(s => !(DEMO_BORRADAS[id] || []).includes(s.n));
+      const id = 'ex' + i, extra = (DEMO_SERIES[id] || []).map(s => ({ ...s, ejercicioId: id }));
+      const base9 = a[9].map(([n, reps, carga]) => ({ n, reps, carga, pr: n === 3 && i === 2, ejercicioId: id }));
+      // Reemplazos registrados en la demo (otro ejercicio ligado a esta fila)
+      const reem = Object.entries(DEMO_SERIES).filter(([k]) => k.startsWith('alt')).flatMap(([k, l]) => l.filter(s => s.rutinaId === 'r' + i && !(DEMO_BORRADAS[k] || []).includes(s.n)));
+      const hechas = base9.concat(extra).filter(s => !(DEMO_BORRADAS[id] || []).includes(s.n)).concat(reem);
+      const ALT = {
+        3: [['alt1', 'Sentadilla goblet', 'Mancuernas', ['Cuádriceps','Glúteos'], 'Goblet_Squat', { fecha: dAtras(6), reps: 10, carga: 16 }],
+            ['alt2', 'Sentadilla con barra', 'Barra', ['Cuádriceps','Glúteos','Core'], 'Barbell_Squat', null],
+            ['alt3', 'Zancada búlgara', 'Mancuernas', ['Cuádriceps','Glúteos'], '', { fecha: dAtras(12), reps: 8, carga: 10 }]],
+        2: [['alt4', 'Puente de glúteo con barra', 'Barra', ['Glúteos'], '', null], ['alt5', 'Patada de glúteo en polea', 'Polea', ['Glúteos'], '', { fecha: dAtras(8), reps: 12, carga: 15 }]],
+      };
+      const alternativas = (ALT[i] || []).map(([aid, nom, eq, gr, foto, ult]) => ({ ejercicioId: aid, nombre: nom, equipo: eq, grupos: gr, secundarios: [], fotoId: foto, zonas: ['Rodilla'], tecnica: '', errores: '', video: null,
+        zonaVigilada: true, zonaActiva: i === 3, ultima: ult }));
       const rodilla = ['Sentadilla isométrica en pared', 'Prensa de piernas', 'Sentadilla goblet'].includes(a[0]);
       return conTec(a[0], { id:'r' + i, ejercicioId:id, orden:i + 1, nombre:a[0], seccion:a[1], superserie:a[2], series:a[3], reps:a[4], carga:a[5], rir:a[6], descanso:a[7], notas:a[8], sesion:'Glúteo y cuádriceps', bloque:'Acumulación',
         equipo: ['Activación de glúteo con banda', 'Sentadilla isométrica en pared', 'Puente de glúteo en suelo'].includes(a[0]) ? 'Peso corporal' : 'Máquina',
         unidad: /min/.test(a[4]) ? 'min' : /\ds\b|\d\s+s\b/.test(a[4]) ? 's' : 'kg',
         zonaVigilada: rodilla, zonaActiva: rodilla, molestiaHoy: rodilla && hechas.length ? (DEMO_MOLESTIA[id] ?? null) : null,
         ultima: i === 2 ? { fecha: dAtras(5), reps: 12, carga: 55 } : i === 3 ? { fecha: dAtras(5), reps: 12, carga: 80 } : null,
-        hechas });
+        hechas, alternativas, reemplazoId: reem.length ? reem[reem.length - 1].ejercicioId : null });
     });
     return { ...base, hoy:{ fecha: iso(hoyD), dia: ['Domingo','Lunes','Martes','Miércoles','Jueves','Viernes','Sábado'][hoyD.getDay()], modo:'flexible', estado:'entreno', sesion:'Glúteo y cuádriceps', bloque:'Acumulación', ejercicios: ej,
       lesiones:[{ zona:'Rodilla', lado:'Izquierdo', estado:'En recuperación' }],

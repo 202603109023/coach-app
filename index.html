@@ -478,7 +478,8 @@ async function enviar(accion, datos){
   if (DEMO) return demoEnviar(accion, datos);
   let res, r;
   try {
-    res = await fetch(API, { method:'POST', headers:{ 'Content-Type':'application/json', 'ngrok-skip-browser-warning':'1' }, body: JSON.stringify({ initData: INIT, accion, usuarioId: S.usuarioId, datos }) });
+    // keepalive: la petición sigue aunque la app pase a segundo plano (bloquear el teléfono tras guardar)
+    res = await fetch(API, { method:'POST', keepalive: true, headers:{ 'Content-Type':'application/json', 'ngrok-skip-browser-warning':'1' }, body: JSON.stringify({ initData: INIT, accion, usuarioId: S.usuarioId, datos }) });
   } catch (e) { return { ok:false, mensaje:'Sin conexión con el coach. No se guardó; intenta de nuevo.' }; }
   try { r = await res.json(); } catch (e) { return { ok:false, mensaje:'El servidor no respondió bien (' + res.status + '). No se guardó.' }; }
   return r || { ok:false, mensaje:'Respuesta vacía.' };
@@ -549,21 +550,52 @@ function avisoTg(v){
 function guardarTimer(){ try { TIMER ? localStorage.setItem('timer', JSON.stringify(TIMER)) : localStorage.removeItem('timer'); } catch (e) {} }
 // El sonido solo se puede preparar con un toque del usuario (por eso se llama al tocar Guardar o Iniciar)
 function prepararAudio(){
+  // iPhone: que suene como reproducción (si no, el interruptor de silencio lo apaga)
+  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
   try { TM.audio = TM.audio || new (window.AudioContext || window.webkitAudioContext)(); if (TM.audio.state === 'suspended') TM.audio.resume(); } catch (e) {}
+}
+// Salida común con compresor: permite subir el volumen sin que se distorsione
+function salidaAudio(a){
+  if (TM.salida && TM.salida.context === a) return TM.salida;
+  try {
+    const c = a.createDynamicsCompressor();
+    c.threshold.value = -18; c.knee.value = 6; c.ratio.value = 8; c.attack.value = 0.002; c.release.value = 0.1;
+    const g = a.createGain(); g.gain.value = 1.5;
+    c.connect(g).connect(a.destination);
+    TM.salida = c;
+  } catch (e) { TM.salida = a.destination; }
+  return TM.salida;
+}
+// Un tono: dos osciladores (cuadrada + aguda) entre 1–3 kHz, el rango que mejor se oye en el parlante del teléfono
+function tono(a, t, frec, dur, vol){
+  const g = a.createGain();
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + 0.01);
+  g.gain.setValueAtTime(vol, t + dur - 0.03); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  g.connect(salidaAudio(a));
+  for (const [tipo, f] of [['square', frec], ['triangle', frec * 2]]) {
+    const o = a.createOscillator(); o.type = tipo; o.frequency.value = f;
+    o.connect(g); o.start(t); o.stop(t + dur + 0.02);
+  }
 }
 function pitido(veces, frec){
   const a = TM.audio; if (!a) return;
   try {
-    for (let k = 0; k < (veces || 1); k++) {
-      const o = a.createOscillator(), g = a.createGain(), t = a.currentTime + k * 0.32;
-      o.type = 'sine'; o.frequency.value = frec || 880;
-      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.35, t + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
-      o.connect(g).connect(a.destination); o.start(t); o.stop(t + 0.25);
-    }
+    if (a.state === 'suspended') a.resume();
+    for (let k = 0; k < (veces || 1); k++) tono(a, a.currentTime + 0.02 + k * 0.3, frec || 1500, 0.16, 0.5);
+  } catch (e) {}
+}
+// Alarma de fin: 3 rondas de 3 pitidos fuertes alternando dos tonos (~2,5 s), como un despertador
+function alarma(){
+  const a = TM.audio; if (!a) return;
+  try {
+    if (a.state === 'suspended') a.resume();
+    const t0 = a.currentTime + 0.02;
+    for (let r = 0; r < 3; r++) for (let k = 0; k < 3; k++)
+      tono(a, t0 + r * 0.9 + k * 0.2, k % 2 ? 2350 : 1760, 0.14, 0.9);
   } catch (e) {}
 }
 function alertaFin(){
-  pitido(3);
+  alarma();
   try { navigator.vibrate && navigator.vibrate([350, 120, 350, 120, 350]); } catch (e) {}
   try { TG && TG.HapticFeedback && TG.HapticFeedback.notificationOccurred('success'); } catch (e) {}
 }
@@ -576,14 +608,17 @@ async function pantallaEncendida(on){
 }
 // ---- Aviso del bot (n8n espera el descanso y manda el mensaje; si se salta o ajusta, se cancela) ----
 function cancelarAvisoBot(){
-  clearTimeout(TM.deb);
+  clearTimeout(TM.deb); TM.pend = null;
   if (TIMER && TIMER.espera) { const id = TIMER.espera; TIMER.espera = null; enviar('descanso_cancelar', { id }); }
 }
-function programarAvisoBot(){
-  clearTimeout(TM.deb);
+// Al iniciar el descanso se programa al tiro (si se bloquea el teléfono enseguida, Telegram congela la app);
+// al ajustar con +/− se espera 1,5 s para no mandar uno por cada toque.
+function programarAvisoBot(espera = 1500){
+  clearTimeout(TM.deb); TM.pend = null;
   if (!TIMER || TIMER.modo !== 'descanso' || !avisoTg()) return;
   const yo = TIMER;
-  TM.deb = setTimeout(async () => {
+  const fn = TM.pend = async () => {
+    clearTimeout(TM.deb); if (TM.pend !== fn) return; TM.pend = null;
     if (TIMER !== yo || !avisoTg()) return;
     const resta = Math.round((yo.fin - Date.now()) / 1000);
     if (resta < 15) return;   // muy corto: basta con el aviso de la app
@@ -592,13 +627,14 @@ function programarAvisoBot(){
     if (!id) return;
     if (TIMER === yo && !yo.sonado) { yo.espera = id; guardarTimer(); }
     else enviar('descanso_cancelar', { id });   // ya cambió mientras se programaba
-  }, 1500);
+  };
+  if (espera > 0) TM.deb = setTimeout(fn, espera); else fn();
 }
 // ---- Descanso ----
 function iniciarDescanso(seg, texto){
   cancelarAvisoBot();
   TIMER = { modo: 'descanso', fin: Date.now() + seg * 1000, total: seg, texto: texto || '' };
-  guardarTimer(); pintarTimer(); programarAvisoBot();
+  guardarTimer(); pintarTimer(); programarAvisoBot(0);
 }
 function ajustarDescanso(d){
   if (!TIMER || TIMER.modo !== 'descanso' || TIMER.sonado) return;
@@ -659,6 +695,9 @@ function tickTimer(){
   if (TIMER.modo === 'descanso') {
     const resta = (TIMER.fin - ahora) / 1000;
     if (resta > 0) {
+      // Aviso previo: un pitido corto en 3, 2 y 1
+      const n = Math.ceil(resta);
+      if (n <= 3 && TIMER.previo !== n && TIMER.total > 10) { TIMER.previo = n; pitido(1, 1200); }
       set('tm-lbl', 'Descanso'); set('tm-t', mmss(Math.ceil(resta)));
       $('#tm-bar').style.width = Math.max(0, Math.min(100, 100 * (1 - resta / TIMER.total))) + '%';
       return;
@@ -706,7 +745,10 @@ $('#timer').addEventListener('click', ev => {
     toast(on ? 'También te aviso por Telegram al terminar el descanso.' : 'Sin aviso por Telegram (solo en la app).');
   }
 });
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && TIMER) { pantallaEncendida(true); tickTimer(); } });
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden' && TM.pend) TM.pend();   // se va a segundo plano: programar el aviso ya
+  if (document.visibilityState === 'visible' && TIMER) { pantallaEncendida(true); tickTimer(); }
+});
 // Al abrir la app: retoma un temporizador que seguía corriendo
 (function retomarTimer(){
   try {
